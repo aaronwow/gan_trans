@@ -1,20 +1,16 @@
 import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
-import 'package:path_provider/path_provider.dart';
-import 'package:record/record.dart';
 import 'catalog.dart';
+import 'chat_conversation_controller.dart';
+import 'chat_turn.dart';
 import 'main.dart';
-import 'providers.dart';
 import 'scenes_screen.dart';
 import 'settings.dart';
 import 'settings_screen.dart';
-import 'stt_service.dart';
-import 'tts_service.dart';
+
+part 'chat_widgets.dart';
 
 class ChatScreen extends StatefulWidget {
   final AppSettings settings;
@@ -24,75 +20,12 @@ class ChatScreen extends StatefulWidget {
   State<ChatScreen> createState() => _ChatScreenState();
 }
 
-enum TurnState { transcribing, sttError, waitingLlm, sending, llmError, done }
-
-class ChatTurn {
-  final int id;
-  String? audioPath; // non-null until STT succeeds (kept for sttError retry)
-  final String audioFormat;
-  String? userText;
-  String? assistantText;
-  TurnState state;
-  Object? lastError;
-  bool errorExpanded = false;
-  http.Client? stopper; // closes to abort in-flight STT or LLM request
-  bool cancelled = false; // set when user hits Cancel
-  /// True when this turn was sent in audio-direct mode: the recording was
-  /// fed straight to the chat model (no STT step). Drives bubble rendering.
-  final bool fusedAudio;
-  ChatTurn({
-    required this.id,
-    required this.audioPath,
-    this.audioFormat = 'wav',
-    this.fusedAudio = false,
-  }) : state = fusedAudio ? TurnState.sending : TurnState.transcribing;
-}
-
 class _ChatScreenState extends State<ChatScreen>
     with TickerProviderStateMixin, RouteAware {
   final _scroll = ScrollController();
-  final _turns = <ChatTurn>[];
-  final _recorder = AudioRecorder();
-  final _stt = SttService();
-  final _tts = TtsService();
-
-  // WAV is accepted by both OpenAI and Volcengine Flash.
-  static const _recordFormat = 'wav';
-
-  bool _listening = false;
-  bool _autoRestarting = false;
-  double _soundLevel = 0;
-  StreamSubscription<Amplitude>? _ampSub;
-  StreamSubscription<bool>? _playingSub;
-  String? _currentRecordingPath;
-  DateTime? _recordStartedAt;
-  int? _speakingTurnId;
-  // True while the user has the continuous-mode loop "armed". In half-duplex
-  // continuous, the mic auto-resumes after the pipeline goes idle as long as
-  // this stays true. In full-duplex continuous it tracks the same intent but
-  // restart is handled inline by _autoCut.
-  bool _continuousLoopActive = false;
-  // Number of TTS clips queued or in-flight (queued but not yet finished).
-  // Used by half-duplex idle detection so the mic doesn't reopen between
-  // "LLM done" and "audio playback started".
-  int _ttsPending = 0;
-  // Snapshot of _continuousLoopActive captured when another route covers us,
-  // so we can restore the loop on return without resurrecting it after the
-  // user explicitly stopped it.
-  bool _resumeLoopOnReturn = false;
-
-  // Continuous / VAD state.
-  bool _speakingNow = false;
-  DateTime? _firstSpeechAt;
-  DateTime? _lastSpeechAt;
-  bool _hadSpeech = false;
-
-  int _nextTurnId = 0;
-  Future<void> _llmChain = Future<void>.value();
-  Future<void> _ttsChain = Future<void>.value();
-
   final _textInput = TextEditingController();
 
+  late final ChatConversationController _chat;
   late final AnimationController _pulse;
 
   @override
@@ -102,13 +35,11 @@ class _ChatScreenState extends State<ChatScreen>
       vsync: this,
       duration: const Duration(milliseconds: 900),
     )..repeat(reverse: true);
-    widget.settings.addListener(_onSettingsChanged);
-    _playingSub = _tts.playingStream.listen((playing) {
-      if (!playing && mounted && _speakingTurnId != null) {
-        setState(() => _speakingTurnId = null);
-      }
-      if (!playing) _maybeResumeHalfDuplex();
-    });
+    _chat = ChatConversationController(
+      settings: widget.settings,
+      onMessage: _showSnack,
+      onScrollToBottom: _scrollToBottom,
+    )..addListener(_onChatChanged);
   }
 
   @override
@@ -126,590 +57,34 @@ class _ChatScreenState extends State<ChatScreen>
   // recorder can't desync from the lit "continuous" button while we're hidden.
   @override
   void didPushNext() {
-    final s = widget.settings;
-    final isContinuous = s.voiceMode == VoiceMode.continuous;
-    _resumeLoopOnReturn =
-        isContinuous && (_continuousLoopActive || _listening);
-    _continuousLoopActive = false;
-    if (_listening) {
-      unawaited(_cutAndProcess());
-    }
-    if (mounted) setState(() {});
+    _chat.didPushNext();
   }
 
   @override
   void didPopNext() {
-    if (!_resumeLoopOnReturn) return;
-    _resumeLoopOnReturn = false;
-    final s = widget.settings;
-    if (s.voiceMode != VoiceMode.continuous) return;
-    if (!s.voiceInputAvailable) return;
-    _continuousLoopActive = true;
-    if (s.continuousFullDuplex) {
-      if (!_pipelineBusy() && !_listening) {
-        unawaited(_startListening());
-      }
-    } else {
-      _maybeResumeHalfDuplex();
-    }
+    _chat.didPopNext();
+  }
+
+  void _onChatChanged() {
     if (mounted) setState(() {});
-  }
-
-  // ---------- Half-duplex idle/resume ----------
-
-  bool _pipelineBusy() {
-    for (final t in _turns) {
-      if (t.state == TurnState.transcribing ||
-          t.state == TurnState.waitingLlm ||
-          t.state == TurnState.sending) {
-        return true;
-      }
-    }
-    if (_tts.isPlaying) return true;
-    if (_ttsPending > 0) return true;
-    return false;
-  }
-
-  bool _isHalfDuplexContinuous() {
-    final s = widget.settings;
-    return s.voiceMode == VoiceMode.continuous && !s.continuousFullDuplex;
-  }
-
-  void _maybeResumeHalfDuplex() {
-    if (!mounted) return;
-    if (!_isHalfDuplexContinuous()) return;
-    if (!_continuousLoopActive) return;
-    if (_listening || _autoRestarting) return;
-    if (!widget.settings.voiceInputAvailable) return;
-    if (_pipelineBusy()) return;
-    unawaited(_startListening());
-  }
-
-  void _onSettingsChanged() {
-    if (!widget.settings.voiceInputAvailable && _listening) {
-      unawaited(_cutAndProcess());
-    }
-    if (widget.settings.voiceMode != VoiceMode.continuous) {
-      _continuousLoopActive = false;
-    }
-    setState(() {});
   }
 
   @override
   void dispose() {
     routeObserver.unsubscribe(this);
-    widget.settings.removeListener(_onSettingsChanged);
-    _ampSub?.cancel();
-    _playingSub?.cancel();
-    _recorder.dispose();
+    _chat.removeListener(_onChatChanged);
+    _chat.dispose();
     _pulse.dispose();
-    _tts.dispose();
     _scroll.dispose();
     _textInput.dispose();
     super.dispose();
-  }
-
-  // ---------- Recording + STT ----------
-
-  Future<void> _startListening() async {
-    if (_listening) return;
-    if (!await _recorder.hasPermission()) {
-      _showSnack('Microphone permission denied.');
-      return;
-    }
-    final dir = await getTemporaryDirectory();
-    final path =
-        '${dir.path}/rec_${DateTime.now().millisecondsSinceEpoch}.$_recordFormat';
-    try {
-      final aec = widget.settings.aecEnabled;
-      await _recorder.start(
-        RecordConfig(
-          encoder: AudioEncoder.wav,
-          sampleRate: 16000,
-          numChannels: 1,
-          // System AEC: iOS uses VoiceProcessingIO; Android uses
-          // AcousticEchoCanceler — only effective when paired with the
-          // voiceCommunication audio source + modeInCommunication.
-          echoCancel: aec,
-          noiseSuppress: aec,
-          autoGain: aec,
-          androidConfig: AndroidRecordConfig(
-            audioSource: aec
-                ? AndroidAudioSource.voiceCommunication
-                : AndroidAudioSource.defaultSource,
-            audioManagerMode: aec
-                ? AudioManagerMode.modeInCommunication
-                : AudioManagerMode.modeNormal,
-          ),
-        ),
-        path: path,
-      );
-    } catch (e) {
-      _showSnack('Failed to start recording: $e');
-      return;
-    }
-    _currentRecordingPath = path;
-    _recordStartedAt = DateTime.now();
-    _hadSpeech = false;
-    _speakingNow = false;
-    _firstSpeechAt = null;
-    _lastSpeechAt = null;
-    _ampSub?.cancel();
-    _ampSub = _recorder
-        .onAmplitudeChanged(const Duration(milliseconds: 150))
-        .listen(_onAmplitude);
-    setState(() => _listening = true);
-  }
-
-  void _onAmplitude(Amplitude a) {
-    // Amplitude.current is in dBFS (negative). Map ~[-60, 0] dB → [0, 10].
-    final db = a.current.isFinite ? a.current : -60.0;
-    final normalized = ((db + 60) / 60).clamp(0.0, 1.0);
-    final level = normalized * 10;
-    final s = widget.settings;
-    final isContinuous = s.voiceMode == VoiceMode.continuous;
-    final threshold = s.vadThresholdLevel;
-    final above = level >= threshold;
-
-    if (!mounted) return;
-    setState(() {
-      _soundLevel = level;
-      _speakingNow = above;
-    });
-
-    if (!isContinuous || !_listening) return;
-
-    final now = DateTime.now();
-    if (above) {
-      _hadSpeech = true;
-      _firstSpeechAt ??= now;
-      _lastSpeechAt = now;
-      return;
-    }
-    // Silence: if we've had speech and silence exceeded pause threshold, auto-send.
-    if (!_hadSpeech) return;
-    final last = _lastSpeechAt ?? _recordStartedAt ?? now;
-    final silentMs = now.difference(last).inMilliseconds;
-    final pauseMs = (s.vadPauseSeconds * 1000).round();
-    if (silentMs >= pauseMs) {
-      _autoCut();
-    }
-  }
-
-  Future<void> _autoCut() async {
-    if (!_listening) return;
-    _autoRestarting = true;
-    try {
-      await _cutAndProcess();
-      // In full-duplex continuous mode the mic reopens immediately so the
-      // user can keep talking. In half-duplex it stays closed until the
-      // pipeline (STT/LLM/TTS) finishes — see _maybeResumeHalfDuplex.
-      if (mounted &&
-          widget.settings.voiceMode == VoiceMode.continuous &&
-          widget.settings.continuousFullDuplex) {
-        await _startListening();
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _autoRestarting = false);
-      } else {
-        _autoRestarting = false;
-      }
-    }
-  }
-
-  Future<void> _cutAndProcess() async {
-    if (!_listening) return;
-    final path = await _recorder.stop();
-    await _ampSub?.cancel();
-    _ampSub = null;
-    final startedAt = _recordStartedAt;
-    final firstSpeech = _firstSpeechAt;
-    final lastSpeech = _lastSpeechAt;
-    final hadSpeech = _hadSpeech;
-    final isContinuous =
-        widget.settings.voiceMode == VoiceMode.continuous;
-    _recordStartedAt = null;
-    _firstSpeechAt = null;
-    _lastSpeechAt = null;
-    _hadSpeech = false;
-    setState(() {
-      _listening = false;
-      _soundLevel = 0;
-    });
-    final recorded = path ?? _currentRecordingPath;
-    _currentRecordingPath = null;
-    if (recorded == null) {
-      _maybeResumeHalfDuplex();
-      return;
-    }
-
-    final Duration elapsed;
-    if (isContinuous) {
-      elapsed = (hadSpeech && firstSpeech != null && lastSpeech != null)
-          ? lastSpeech.difference(firstSpeech)
-          : Duration.zero;
-    } else {
-      elapsed = startedAt == null
-          ? Duration.zero
-          : DateTime.now().difference(startedAt);
-    }
-    final minMs = (widget.settings.minRecordSeconds * 1000).round();
-    if (elapsed.inMilliseconds < minMs) {
-      unawaited(File(recorded).delete().catchError((_) => File(recorded)));
-      _maybeResumeHalfDuplex();
-      return;
-    }
-
-    final fused = widget.settings.audioDirectActive;
-    final turn = ChatTurn(
-      id: _nextTurnId++,
-      audioPath: recorded,
-      audioFormat: _recordFormat,
-      fusedAudio: fused,
-    );
-    setState(() => _turns.add(turn));
-    _scrollToBottom();
-    if (fused) {
-      unawaited(_runFusedChat(turn));
-    } else {
-      unawaited(_runStt(turn).then((ok) {
-        if (ok) _scheduleLlm(turn);
-      }));
-    }
-  }
-
-  // ---------- Per-turn pipeline ----------
-
-  Future<bool> _runStt(ChatTurn t) async {
-    if (t.audioPath == null) return false;
-    if (!mounted) return false;
-    t.cancelled = false;
-    final client = http.Client();
-    t.stopper = client;
-    setState(() {
-      t.state = TurnState.transcribing;
-      t.lastError = null;
-    });
-    try {
-      final sttReq = widget.settings.buildSttRequest();
-      if (sttReq == null) {
-        throw StateError('STT is off — pick a provider in Settings.');
-      }
-      final text = await _stt.transcribe(
-        filePath: t.audioPath!,
-        format: t.audioFormat,
-        request: sttReq,
-        client: client,
-        timeout: Duration(seconds: widget.settings.sttTimeoutSeconds),
-      );
-      final trimmed = text.trim();
-      final path = t.audioPath!;
-      unawaited(File(path).delete().catchError((_) => File(path)));
-      if (!mounted) return false;
-      setState(() {
-        t.audioPath = null;
-        t.userText = trimmed;
-        t.state =
-            trimmed.isEmpty ? TurnState.done : TurnState.waitingLlm;
-      });
-      _scrollToBottom();
-      return trimmed.isNotEmpty;
-    } catch (e) {
-      debugPrint('[STT] turn ${t.id} failed: $e');
-      if (!mounted) return false;
-      if (t.cancelled) return false; // state already set by _cancelTurn
-      setState(() {
-        t.state = TurnState.sttError;
-        t.lastError = e;
-      });
-      return false;
-    } finally {
-      t.stopper = null;
-      client.close();
-      _maybeResumeHalfDuplex();
-    }
-  }
-
-  void _scheduleLlm(ChatTurn t) {
-    final prev = _llmChain;
-    _llmChain = () async {
-      try {
-        await prev;
-      } catch (_) {}
-      if (!mounted) return;
-      if (t.state != TurnState.waitingLlm) return;
-      await _runLlm(t);
-    }();
-  }
-
-  /// Tolerant JSON extractor for audio-direct + transcript mode. Strips
-  /// ```json fences```, locates the first {...} block, and pulls out
-  /// `transcript` and `output` (also accepts a few aliases). Returns
-  /// `(transcript, output)` or null if nothing usable was found.
-  (String, String)? _parseFusedJson(String reply) {
-    var s = reply.trim();
-    // Strip markdown code fences if present.
-    final fence = RegExp(r'^```(?:json)?\s*([\s\S]*?)\s*```$', multiLine: true);
-    final fm = fence.firstMatch(s);
-    if (fm != null) s = fm.group(1)!.trim();
-    // Slice from first '{' to last '}' so leading/trailing prose is ignored.
-    final start = s.indexOf('{');
-    final end = s.lastIndexOf('}');
-    if (start < 0 || end <= start) return null;
-    final blob = s.substring(start, end + 1);
-    try {
-      final obj = jsonDecode(blob);
-      if (obj is! Map) return null;
-      final transcript = (obj['transcript'] ??
-              obj['original'] ??
-              obj['input'] ??
-              obj['source'] ??
-              '')
-          .toString()
-          .trim();
-      final output = (obj['output'] ??
-              obj['translation'] ??
-              obj['result'] ??
-              obj['text'] ??
-              '')
-          .toString()
-          .trim();
-      if (output.isEmpty && transcript.isEmpty) return null;
-      return (transcript, output.isEmpty ? transcript : output);
-    } catch (_) {
-      return null;
-    }
-  }
-
-  /// Audio-direct path: send the recording straight to the chat model with
-  /// the system prompt, in a single round-trip. Replaces both the STT step
-  /// and the LLM step.
-  Future<void> _runFusedChat(ChatTurn t) async {
-    final s = widget.settings;
-    final req = s.buildChatRequest();
-    if (req == null) {
-      if (!mounted) return;
-      setState(() {
-        t.state = TurnState.llmError;
-        t.lastError = StateError('Pick a Chat provider in Settings.');
-      });
-      return;
-    }
-    if (req.apiKey.isEmpty) {
-      if (!mounted) return;
-      setState(() {
-        t.state = TurnState.llmError;
-        t.lastError =
-            StateError('Set the ${req.providerName} API key in Settings.');
-      });
-      return;
-    }
-    if (t.audioPath == null) return;
-    t.cancelled = false;
-    final http.Client netClient = http.Client();
-    t.stopper = netClient;
-    if (!mounted) return;
-    setState(() {
-      t.state = TurnState.sending;
-      t.lastError = null;
-    });
-    try {
-      final bytes = await File(t.audioPath!).readAsBytes();
-      final sysPrompt = s.composedSystemPrompt();
-      final msgs = <ChatMessage>[
-        if (sysPrompt.isNotEmpty) ChatMessage('system', sysPrompt),
-        ChatMessage(
-          'user',
-          '',
-          audio: ChatAudio(bytes: bytes, format: t.audioFormat),
-        ),
-      ];
-      final chat = ChatClient(
-        dialect: req.dialect,
-        baseUrl: req.baseUrl,
-        apiKey: req.apiKey,
-        model: req.modelId,
-        client: netClient,
-        timeout: Duration(seconds: s.llmTimeoutSeconds),
-      );
-      final reply = await chat.send(msgs);
-      final path = t.audioPath!;
-      unawaited(File(path).delete().catchError((_) => File(path)));
-      if (!mounted) return;
-
-      String? transcript;
-      String output = reply;
-      if (s.audioDirectIncludeTranscript) {
-        final parsed = _parseFusedJson(reply);
-        if (parsed != null) {
-          transcript = parsed.$1;
-          output = parsed.$2;
-        } else {
-          debugPrint('[FusedChat] turn ${t.id} JSON parse failed: $reply');
-        }
-      }
-
-      setState(() {
-        t.audioPath = null;
-        t.userText = transcript;
-        t.assistantText = output;
-        t.state = TurnState.done;
-        t.lastError = null;
-      });
-      _scrollToBottom();
-      if (s.ttsAutoSpeak && s.ttsProviderId != null) {
-        _queueSpeak(output, turnId: t.id);
-      }
-    } catch (e) {
-      debugPrint('[FusedChat] turn ${t.id} failed: $e');
-      if (!mounted) return;
-      if (t.cancelled) return;
-      setState(() {
-        t.state = TurnState.llmError;
-        t.lastError = e;
-      });
-    } finally {
-      t.stopper = null;
-      netClient.close();
-      _maybeResumeHalfDuplex();
-    }
-  }
-
-  Future<void> _runLlm(ChatTurn t) async {
-    final s = widget.settings;
-    final req = s.buildChatRequest();
-    if (req == null) {
-      if (!mounted) return;
-      setState(() {
-        t.state = TurnState.llmError;
-        t.lastError = StateError('Pick a Chat provider in Settings.');
-      });
-      return;
-    }
-    if (req.apiKey.isEmpty) {
-      if (!mounted) return;
-      setState(() {
-        t.state = TurnState.llmError;
-        t.lastError =
-            StateError('Set the ${req.providerName} API key in Settings.');
-      });
-      return;
-    }
-    if (!mounted) return;
-    t.cancelled = false;
-    final http.Client netClient = http.Client();
-    t.stopper = netClient;
-    setState(() {
-      t.state = TurnState.sending;
-      t.lastError = null;
-    });
-    try {
-      final refs = <String>[];
-      final n = s.historyContextCount;
-      if (n > 0) {
-        for (final other in _turns) {
-          if (other.id == t.id) break;
-          final a = other.assistantText?.trim();
-          final u = other.userText?.trim();
-          final pick = (a != null && a.isNotEmpty)
-              ? a
-              : (u != null && u.isNotEmpty ? u : null);
-          if (pick != null) refs.add(pick);
-        }
-      }
-      final recent = refs.length > n ? refs.sublist(refs.length - n) : refs;
-      final sysPrompt = StringBuffer(s.composedSystemPrompt());
-      if (recent.isNotEmpty) {
-        sysPrompt.write(
-            '\n\n以下是之前的对话内容，仅作为翻译/修正的上下文参考，不要回复、重复或翻译它们，只处理本次用户最新输入：');
-        for (final r in recent) {
-          sysPrompt.write('\n- $r');
-        }
-      }
-      final userText = t.userText ?? '';
-      final msgs = <ChatMessage>[
-        ChatMessage('system', sysPrompt.toString()),
-        ChatMessage('user', userText),
-      ];
-      final chat = ChatClient(
-        dialect: req.dialect,
-        baseUrl: req.baseUrl,
-        apiKey: req.apiKey,
-        model: req.modelId,
-        client: netClient,
-        timeout: Duration(seconds: s.llmTimeoutSeconds),
-      );
-      final reply = await chat.send(msgs);
-      if (!mounted) return;
-      setState(() {
-        t.assistantText = reply;
-        t.state = TurnState.done;
-        t.lastError = null;
-      });
-      _scrollToBottom();
-      if (s.ttsAutoSpeak && s.ttsProviderId != null) {
-        _queueSpeak(reply, turnId: t.id);
-      }
-    } catch (e) {
-      debugPrint('[LLM] turn ${t.id} failed: $e');
-      if (!mounted) return;
-      if (t.cancelled) return;
-      setState(() {
-        t.state = TurnState.llmError;
-        t.lastError = e;
-      });
-    } finally {
-      t.stopper = null;
-      netClient.close();
-      _maybeResumeHalfDuplex();
-    }
   }
 
   void _sendTypedText() {
     final text = _textInput.text.trim();
     if (text.isEmpty) return;
     _textInput.clear();
-    final turn = ChatTurn(id: _nextTurnId++, audioPath: null);
-    turn.userText = text;
-    turn.state = TurnState.waitingLlm;
-    setState(() => _turns.add(turn));
-    _scrollToBottom();
-    _scheduleLlm(turn);
-  }
-
-  void _cancelTurn(ChatTurn t) {
-    if (t.state != TurnState.transcribing &&
-        t.state != TurnState.waitingLlm &&
-        t.state != TurnState.sending) {
-      return;
-    }
-    t.cancelled = true;
-    final stopper = t.stopper;
-    t.stopper = null;
-    stopper?.close();
-    final nextState = t.state == TurnState.transcribing
-        ? TurnState.sttError
-        : TurnState.llmError;
-    setState(() {
-      t.state = nextState;
-      t.lastError = 'Cancelled';
-    });
-  }
-
-  Future<void> _retryTurn(ChatTurn t) async {
-    if (t.fusedAudio && t.audioPath != null) {
-      await _runFusedChat(t);
-      return;
-    }
-    if (t.state == TurnState.sttError) {
-      final ok = await _runStt(t);
-      if (ok) _scheduleLlm(t);
-    } else if (t.state == TurnState.llmError) {
-      if (!mounted) return;
-      setState(() => t.state = TurnState.waitingLlm);
-      await _runLlm(t);
-    }
+    _chat.sendTypedText(text);
   }
 
   void _scrollToBottom() {
@@ -728,74 +103,13 @@ class _ChatScreenState extends State<ChatScreen>
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
   }
 
-  void _queueSpeak(String text, {int? turnId}) {
-    final prev = _ttsChain;
-    _ttsPending++;
-    _ttsChain = () async {
-      try {
-        await prev;
-      } catch (_) {}
-      try {
-        if (!mounted) return;
-        // Wait until any currently playing clip finishes before starting the next.
-        await _tts.waitForIdle();
-        if (!mounted) return;
-        await _speakText(text, turnId: turnId);
-        await _tts.waitForIdle();
-      } finally {
-        _ttsPending = (_ttsPending - 1).clamp(0, 1 << 30);
-        _maybeResumeHalfDuplex();
-      }
-    }();
-  }
-
-  void _cancelTtsQueue() {
-    _ttsChain = Future<void>.value();
-    // Clipped chains never run their finally blocks, so reset the counter.
-    _ttsPending = 0;
-  }
-
-  Future<void> _speakText(String text, {int? turnId}) async {
-    final s = widget.settings;
-    final req = s.buildTtsRequest();
-    if (req == null) return;
-    if (turnId != null) {
-      setState(() => _speakingTurnId = turnId);
-    }
-    try {
-      await _tts.speak(
-        text: text,
-        request: req,
-        timeout: Duration(seconds: s.ttsTimeoutSeconds),
-      );
-    } catch (e) {
-      if (mounted) {
-        setState(() => _speakingTurnId = null);
-        _showSnack('TTS error: $e');
-      }
-    }
-  }
-
-  Future<void> _stopSpeaking() async {
-    _cancelTtsQueue();
-    await _tts.stop();
-    if (mounted) setState(() => _speakingTurnId = null);
-  }
-
   void _copyMessage(String text) {
     Clipboard.setData(ClipboardData(text: text));
     _showSnack('Copied');
   }
 
   Future<void> _toggleVoiceMode() async {
-    final s = widget.settings;
-    if (_listening) await _cutAndProcess();
-    _continuousLoopActive = false;
-    await s.setVoiceMode(
-      s.voiceMode == VoiceMode.continuous
-          ? VoiceMode.pushToTalk
-          : VoiceMode.continuous,
-    );
+    await _chat.toggleVoiceMode();
   }
 
   Future<void> _openVadQuickAdjust() async {
@@ -817,12 +131,15 @@ class _ChatScreenState extends State<ChatScreen>
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('VAD quick adjust',
-                    style:
-                        TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                const Text(
+                  'VAD quick adjust',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                ),
                 const SizedBox(height: 12),
-                Text('Silence cutoff: ${s.vadPauseSeconds.toStringAsFixed(1)}s',
-                    style: const TextStyle(fontWeight: FontWeight.w600)),
+                Text(
+                  'Silence cutoff: ${s.vadPauseSeconds.toStringAsFixed(1)}s',
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
                 Slider(
                   min: 0.1,
                   max: 5,
@@ -835,8 +152,10 @@ class _ChatScreenState extends State<ChatScreen>
                   },
                 ),
                 const SizedBox(height: 8),
-                Text('Speech threshold: ${s.vadThresholdLevel.toStringAsFixed(1)}',
-                    style: const TextStyle(fontWeight: FontWeight.w600)),
+                Text(
+                  'Speech threshold: ${s.vadThresholdLevel.toStringAsFixed(1)}',
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
                 Slider(
                   min: 0.5,
                   max: 6,
@@ -886,10 +205,7 @@ class _ChatScreenState extends State<ChatScreen>
             ),
           ),
           const SizedBox(width: 8),
-          _IconPill(
-            icon: Icons.tune,
-            onTap: _openConfigSheet,
-          ),
+          _IconPill(icon: Icons.tune, onTap: _openConfigSheet),
         ],
       ),
     );
@@ -898,7 +214,9 @@ class _ChatScreenState extends State<ChatScreen>
   void _openScenes() {
     Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => ScenesScreen(settings: widget.settings)),
+      MaterialPageRoute(
+        builder: (_) => ScenesScreen(settings: widget.settings),
+      ),
     );
   }
 
@@ -963,8 +281,7 @@ class _ChatScreenState extends State<ChatScreen>
                                     'Current chat model has no audio input.',
                                     style: TextStyle(fontSize: 11),
                                   ),
-                            value:
-                                s.audioDirectChat && s.chatModelAcceptsAudio,
+                            value: s.audioDirectChat && s.chatModelAcceptsAudio,
                             onChanged: s.chatModelAcceptsAudio
                                 ? (v) async {
                                     await s.setAudioDirectChat(v);
@@ -979,7 +296,8 @@ class _ChatScreenState extends State<ChatScreen>
                                 contentPadding: EdgeInsets.zero,
                                 dense: true,
                                 title: const Text(
-                                    'Return original transcript (JSON)'),
+                                  'Return original transcript (JSON)',
+                                ),
                                 value: s.audioDirectIncludeTranscript,
                                 onChanged: (v) async {
                                   await s.setAudioDirectIncludeTranscript(v);
@@ -1029,8 +347,10 @@ class _ChatScreenState extends State<ChatScreen>
                     const Divider(height: 28),
                     Row(
                       children: [
-                        const Text('修正+翻译',
-                            style: TextStyle(fontWeight: FontWeight.bold)),
+                        const Text(
+                          '修正+翻译',
+                          style: TextStyle(fontWeight: FontWeight.bold),
+                        ),
                         const Spacer(),
                         Switch(
                           value: s.translationEnabled,
@@ -1057,8 +377,12 @@ class _ChatScreenState extends State<ChatScreen>
                               isDense: true,
                             ),
                             items: kTranslationLanguages
-                                .map((l) => DropdownMenuItem(
-                                    value: l, child: Text(l)))
+                                .map(
+                                  (l) => DropdownMenuItem(
+                                    value: l,
+                                    child: Text(l),
+                                  ),
+                                )
                                 .toList(),
                             onChanged: (v) {
                               if (v == null) return;
@@ -1081,8 +405,12 @@ class _ChatScreenState extends State<ChatScreen>
                               isDense: true,
                             ),
                             items: kTranslationLanguages
-                                .map((l) => DropdownMenuItem(
-                                    value: l, child: Text(l)))
+                                .map(
+                                  (l) => DropdownMenuItem(
+                                    value: l,
+                                    child: Text(l),
+                                  ),
+                                )
                                 .toList(),
                             onChanged: (v) {
                               if (v == null) return;
@@ -1096,9 +424,13 @@ class _ChatScreenState extends State<ChatScreen>
                     if (langsEqual)
                       const Padding(
                         padding: EdgeInsets.only(top: 8),
-                        child: Text('Pick two different languages.',
-                            style: TextStyle(
-                                color: Colors.redAccent, fontSize: 12)),
+                        child: Text(
+                          'Pick two different languages.',
+                          style: TextStyle(
+                            color: Colors.redAccent,
+                            fontSize: 12,
+                          ),
+                        ),
                       ),
                   ],
                 ),
@@ -1126,8 +458,8 @@ class _ChatScreenState extends State<ChatScreen>
   List<Widget> _turnWidgets(ChatTurn t) {
     final widgets = <Widget>[_userBubble(t)];
     final hasUserText = t.userText != null && t.userText!.isNotEmpty;
-    final showAssistant = (hasUserText || t.fusedAudio) &&
-        t.state != TurnState.sttError;
+    final showAssistant =
+        (hasUserText || t.fusedAudio) && t.state != TurnState.sttError;
     if (showAssistant) widgets.add(_assistantBubble(t));
     return widgets;
   }
@@ -1136,7 +468,8 @@ class _ChatScreenState extends State<ChatScreen>
     final cs = Theme.of(context).colorScheme;
     final text = t.userText;
     final isError = t.state == TurnState.sttError;
-    final isPending = t.state == TurnState.transcribing ||
+    final isPending =
+        t.state == TurnState.transcribing ||
         (t.fusedAudio && t.state == TurnState.sending);
     Widget content;
     if (isPending) {
@@ -1156,7 +489,7 @@ class _ChatScreenState extends State<ChatScreen>
           Text(label, style: TextStyle(color: cs.onPrimary, height: 1.35)),
           const SizedBox(width: 6),
           InkWell(
-            onTap: () => _cancelTurn(t),
+            onTap: () => _chat.cancelTurn(t),
             customBorder: const CircleBorder(),
             child: Padding(
               padding: const EdgeInsets.all(2),
@@ -1175,8 +508,7 @@ class _ChatScreenState extends State<ChatScreen>
           Flexible(
             child: GestureDetector(
               behavior: HitTestBehavior.opaque,
-              onTap: () =>
-                  setState(() => t.errorExpanded = !t.errorExpanded),
+              onTap: () => setState(() => t.errorExpanded = !t.errorExpanded),
               child: Text(
                 errText,
                 style: TextStyle(color: cs.onErrorContainer, height: 1.35),
@@ -1185,12 +517,11 @@ class _ChatScreenState extends State<ChatScreen>
           ),
           const SizedBox(width: 6),
           InkWell(
-            onTap: () => _retryTurn(t),
+            onTap: () => _chat.retryTurn(t),
             customBorder: const CircleBorder(),
             child: Padding(
               padding: const EdgeInsets.all(4),
-              child: Icon(Icons.refresh,
-                  size: 18, color: cs.onErrorContainer),
+              child: Icon(Icons.refresh, size: 18, color: cs.onErrorContainer),
             ),
           ),
         ],
@@ -1201,8 +532,7 @@ class _ChatScreenState extends State<ChatScreen>
         children: [
           Icon(Icons.mic, size: 16, color: cs.onPrimary),
           const SizedBox(width: 6),
-          Text('Audio',
-              style: TextStyle(color: cs.onPrimary, height: 1.35)),
+          Text('Audio', style: TextStyle(color: cs.onPrimary, height: 1.35)),
         ],
       );
     } else {
@@ -1225,8 +555,7 @@ class _ChatScreenState extends State<ChatScreen>
         children: [
           Flexible(
             child: Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               constraints: BoxConstraints(
                 maxWidth: MediaQuery.of(context).size.width * 0.78,
               ),
@@ -1250,10 +579,10 @@ class _ChatScreenState extends State<ChatScreen>
   Widget _assistantBubble(ChatTurn t) {
     final cs = Theme.of(context).colorScheme;
     final ttsEnabled = widget.settings.ttsProviderId != null;
-    final isSpeakingThis = _speakingTurnId == t.id;
+    final isSpeakingThis = _chat.speakingTurnId == t.id;
     final isError = t.state == TurnState.llmError;
-    final isPending = t.state == TurnState.waitingLlm ||
-        t.state == TurnState.sending;
+    final isPending =
+        t.state == TurnState.waitingLlm || t.state == TurnState.sending;
     final text = t.assistantText;
 
     Widget content;
@@ -1276,7 +605,7 @@ class _ChatScreenState extends State<ChatScreen>
           ),
           const SizedBox(width: 6),
           InkWell(
-            onTap: () => _cancelTurn(t),
+            onTap: () => _chat.cancelTurn(t),
             customBorder: const CircleBorder(),
             child: Padding(
               padding: const EdgeInsets.all(2),
@@ -1297,12 +626,11 @@ class _ChatScreenState extends State<ChatScreen>
           ),
           const SizedBox(width: 6),
           InkWell(
-            onTap: () => _retryTurn(t),
+            onTap: () => _chat.retryTurn(t),
             customBorder: const CircleBorder(),
             child: Padding(
               padding: const EdgeInsets.all(4),
-              child: Icon(Icons.refresh,
-                  size: 18, color: cs.onErrorContainer),
+              child: Icon(Icons.refresh, size: 18, color: cs.onErrorContainer),
             ),
           ),
         ],
@@ -1326,10 +654,10 @@ class _ChatScreenState extends State<ChatScreen>
             const SizedBox(width: 8),
             InkWell(
               onTap: isSpeakingThis
-                  ? _stopSpeaking
+                  ? _chat.stopSpeaking
                   : () {
-                      _cancelTtsQueue();
-                      _speakText(text, turnId: t.id);
+                      _chat.cancelTtsQueue();
+                      _chat.speakText(text, turnId: t.id);
                     },
               borderRadius: BorderRadius.circular(20),
               child: Padding(
@@ -1339,9 +667,7 @@ class _ChatScreenState extends State<ChatScreen>
                       ? Icons.stop_circle_outlined
                       : Icons.play_circle_outline,
                   size: 20,
-                  color: isSpeakingThis
-                      ? cs.primary
-                      : cs.onSurfaceVariant,
+                  color: isSpeakingThis ? cs.primary : cs.onSurfaceVariant,
                 ),
               ),
             ),
@@ -1367,8 +693,7 @@ class _ChatScreenState extends State<ChatScreen>
           const SizedBox(width: 8),
           Flexible(
             child: Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               constraints: BoxConstraints(
                 maxWidth: MediaQuery.of(context).size.width * 0.78,
               ),
@@ -1392,8 +717,7 @@ class _ChatScreenState extends State<ChatScreen>
   String _sttErrorSummary(Object? e) {
     if (e == null) return 'speech to text error';
     final s = e.toString();
-    if (s.contains('20000003') ||
-        s.toLowerCase().contains('no valid speech')) {
+    if (s.contains('20000003') || s.toLowerCase().contains('no valid speech')) {
       return 'no valid speech in audio body';
     }
     return 'speech to text error';
@@ -1421,40 +745,19 @@ class _ChatScreenState extends State<ChatScreen>
     );
     final mic = Expanded(
       child: _MicBar(
-        listening: _listening ||
-            (isContinuous && s.continuousFullDuplex && _autoRestarting) ||
-            (isHalfDuplex && _continuousLoopActive),
+        listening:
+            _chat.listening ||
+            (isContinuous && s.continuousFullDuplex && _chat.autoRestarting) ||
+            (isHalfDuplex && _chat.continuousLoopActive),
         enabled: true,
         continuous: isContinuous,
-        level: _soundLevel,
+        level: _chat.soundLevel,
         pulse: _pulse,
         showGear: isContinuous,
         onGearTap: _openVadQuickAdjust,
-        onPressStart: isContinuous ? null : _startListening,
-        onPressEnd: isContinuous ? null : _cutAndProcess,
-        onTap: isContinuous
-            ? () {
-                if (isHalfDuplex) {
-                  if (_continuousLoopActive) {
-                    _continuousLoopActive = false;
-                    if (_listening) _cutAndProcess();
-                    setState(() {});
-                  } else {
-                    _continuousLoopActive = true;
-                    if (!_pipelineBusy() && !_listening) _startListening();
-                    setState(() {});
-                  }
-                } else {
-                  if (_listening) {
-                    _continuousLoopActive = false;
-                    _cutAndProcess();
-                  } else {
-                    _continuousLoopActive = true;
-                    _startListening();
-                  }
-                }
-              }
-            : null,
+        onPressStart: isContinuous ? null : _chat.startListening,
+        onPressEnd: isContinuous ? null : _chat.cutAndProcess,
+        onTap: isContinuous ? _chat.toggleContinuousListening : null,
       ),
     );
 
@@ -1469,13 +772,13 @@ class _ChatScreenState extends State<ChatScreen>
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (isContinuous && (_listening || _autoRestarting))
+            if (isContinuous && (_chat.listening || _chat.autoRestarting))
               Padding(
                 padding: const EdgeInsets.only(bottom: 6),
                 child: _LevelMeter(
-                  level: _soundLevel,
+                  level: _chat.soundLevel,
                   threshold: s.vadThresholdLevel,
-                  speaking: _speakingNow,
+                  speaking: _chat.speakingNow,
                 ),
               ),
             if (isContinuous)
@@ -1532,7 +835,9 @@ class _ChatScreenState extends State<ChatScreen>
                   filled: true,
                   fillColor: cs.surfaceContainerHighest,
                   contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 14, vertical: 12),
+                    horizontal: 14,
+                    vertical: 12,
+                  ),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(24),
                     borderSide: BorderSide.none,
@@ -1557,35 +862,41 @@ class _ChatScreenState extends State<ChatScreen>
 
   String _statusLabel(VoiceMode mode) {
     final s = widget.settings;
-    final pending = _turns.where((t) =>
-        t.state == TurnState.transcribing ||
-        t.state == TurnState.waitingLlm ||
-        t.state == TurnState.sending).length;
+    final pending = _chat.turns
+        .where(
+          (t) =>
+              t.state == TurnState.transcribing ||
+              t.state == TurnState.waitingLlm ||
+              t.state == TurnState.sending,
+        )
+        .length;
     final pendingSuffix = pending > 0 ? ' · $pending in flight' : '';
     if (mode == VoiceMode.pushToTalk) {
-      final base = _listening ? 'Release to send' : 'Hold to talk';
+      final base = _chat.listening ? 'Release to send' : 'Hold to talk';
       return '$base$pendingSuffix';
     }
     // continuous mode
     if (s.continuousFullDuplex) {
-      if (_listening || _autoRestarting) {
-        final base =
-            _speakingNow ? 'Listening…' : 'Silent (auto-send on pause)';
+      if (_chat.listening || _chat.autoRestarting) {
+        final base = _chat.speakingNow
+            ? 'Listening…'
+            : 'Silent (auto-send on pause)';
         return '$base$pendingSuffix';
       }
       return 'Tap to start continuous listening$pendingSuffix';
     }
     // half-duplex inside continuous
-    if (!_continuousLoopActive) {
+    if (!_chat.continuousLoopActive) {
       return 'Tap to start half-duplex listening$pendingSuffix';
     }
-    if (_listening) {
-      final base =
-          _speakingNow ? 'Listening…' : 'Silent (auto-send on pause)';
+    if (_chat.listening) {
+      final base = _chat.speakingNow
+          ? 'Listening…'
+          : 'Silent (auto-send on pause)';
       return '$base$pendingSuffix';
     }
-    if (_tts.isPlaying) return 'Speaking — mic paused$pendingSuffix';
-    if (_pipelineBusy()) return 'Processing — mic paused$pendingSuffix';
+    if (_chat.ttsPlaying) return 'Speaking — mic paused$pendingSuffix';
+    if (_chat.pipelineBusy) return 'Processing — mic paused$pendingSuffix';
     return 'Resuming…$pendingSuffix';
   }
 
@@ -1603,10 +914,7 @@ class _ChatScreenState extends State<ChatScreen>
           IconButton(
             icon: const Icon(Icons.delete_outline),
             tooltip: 'Clear conversation',
-            onPressed: () => setState(() {
-              _turns.clear();
-              _llmChain = Future<void>.value();
-            }),
+            onPressed: () => unawaited(_chat.clearConversation()),
           ),
           IconButton(
             icon: const Icon(Icons.settings_outlined),
@@ -1623,413 +931,16 @@ class _ChatScreenState extends State<ChatScreen>
         children: [
           _topBar(),
           Expanded(
-            child: _turns.isEmpty
+            child: _chat.turns.isEmpty
                 ? _EmptyState(sceneName: widget.settings.activeScene.name)
                 : ListView(
                     controller: _scroll,
                     padding: const EdgeInsets.symmetric(vertical: 8),
-                    children: [
-                      for (final t in _turns) ..._turnWidgets(t),
-                    ],
+                    children: [for (final t in _chat.turns) ..._turnWidgets(t)],
                   ),
           ),
           _bottomBar(),
         ],
-      ),
-    );
-  }
-}
-
-// ---------------- Widgets ----------------
-
-class _PillButton extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final VoidCallback onTap;
-  const _PillButton({required this.icon, required this.label, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(24),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        decoration: BoxDecoration(
-          color: cs.primaryContainer,
-          borderRadius: BorderRadius.circular(24),
-        ),
-        child: Row(
-          children: [
-            Icon(icon, size: 18, color: cs.onPrimaryContainer),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                label,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: cs.onPrimaryContainer,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-            Icon(Icons.expand_more, size: 18, color: cs.onPrimaryContainer),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _IconPill extends StatelessWidget {
-  final IconData icon;
-  final VoidCallback onTap;
-  const _IconPill({required this.icon, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(24),
-      child: Container(
-        padding: const EdgeInsets.all(10),
-        decoration: BoxDecoration(
-          color: cs.surfaceContainerHighest,
-          borderRadius: BorderRadius.circular(24),
-        ),
-        child: Icon(icon, size: 20, color: cs.onSurfaceVariant),
-      ),
-    );
-  }
-}
-
-class _ModeToggleButton extends StatelessWidget {
-  final VoiceMode mode;
-  final VoidCallback onTap;
-  const _ModeToggleButton({required this.mode, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final isContinuous = mode == VoiceMode.continuous;
-    return Tooltip(
-      message: isContinuous
-          ? 'Continuous mode — tap to switch to push-to-talk'
-          : 'Push-to-talk — tap to switch to continuous',
-      child: InkWell(
-        onTap: onTap,
-        customBorder: const CircleBorder(),
-        child: Container(
-          width: 48,
-          height: 48,
-          decoration: BoxDecoration(
-            color: cs.surfaceContainerHighest,
-            shape: BoxShape.circle,
-            border: Border.all(color: cs.outlineVariant),
-          ),
-          child: Icon(
-            isContinuous ? Icons.all_inclusive : Icons.touch_app_outlined,
-            color: cs.onSurfaceVariant,
-            size: 22,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// Segmented filter shown only in continuous mode — picks half- vs full-duplex.
-class _DuplexFilter extends StatelessWidget {
-  final bool fullDuplex;
-  final ValueChanged<bool> onChanged;
-  const _DuplexFilter({required this.fullDuplex, required this.onChanged});
-
-  @override
-  Widget build(BuildContext context) {
-    return SegmentedButton<bool>(
-      style: const ButtonStyle(visualDensity: VisualDensity.compact),
-      segments: const [
-        ButtonSegment(
-          value: false,
-          icon: Icon(Icons.compare_arrows, size: 16),
-          label: Text('Half-duplex'),
-        ),
-        ButtonSegment(
-          value: true,
-          icon: Icon(Icons.swap_horiz, size: 16),
-          label: Text('Full-duplex'),
-        ),
-      ],
-      selected: {fullDuplex},
-      showSelectedIcon: false,
-      onSelectionChanged: (set) => onChanged(set.first),
-    );
-  }
-}
-
-class _MicBar extends StatelessWidget {
-  final bool listening;
-  final bool enabled;
-  final bool continuous;
-  final double level;
-  final AnimationController pulse;
-  final bool showGear;
-  final VoidCallback? onGearTap;
-  final VoidCallback? onPressStart;
-  final VoidCallback? onPressEnd;
-  final VoidCallback? onTap;
-  const _MicBar({
-    required this.listening,
-    required this.enabled,
-    required this.continuous,
-    required this.level,
-    required this.pulse,
-    required this.showGear,
-    this.onGearTap,
-    this.onPressStart,
-    this.onPressEnd,
-    this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final base = listening ? Colors.redAccent : cs.primary;
-    final disabled = !enabled;
-    final label = listening
-        ? (continuous ? 'Listening — tap to stop' : 'Release to send')
-        : (continuous ? 'Tap to start' : 'Hold to talk');
-    final icon = listening ? Icons.graphic_eq : Icons.mic;
-
-    Widget bar = AnimatedBuilder(
-      animation: pulse,
-      builder: (_, _) {
-        final glow = listening ? (0.25 + pulse.value * 0.25) : 0.18;
-        return Container(
-          height: 56,
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: disabled
-                  ? [Colors.grey.shade400, Colors.grey.shade500]
-                  : [base, base.withValues(alpha: 0.78)],
-              begin: Alignment.centerLeft,
-              end: Alignment.centerRight,
-            ),
-            borderRadius: BorderRadius.circular(28),
-            boxShadow: [
-              BoxShadow(
-                color: base.withValues(alpha: glow),
-                blurRadius: listening ? 22 : 14,
-                offset: const Offset(0, 6),
-              ),
-            ],
-          ),
-          padding: const EdgeInsets.symmetric(horizontal: 18),
-          child: Row(
-            children: [
-              Icon(icon, color: Colors.white, size: 24),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  label,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w600,
-                    fontSize: 15,
-                  ),
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              if (showGear) ...[
-                const SizedBox(width: 8),
-                InkWell(
-                  onTap: onGearTap,
-                  customBorder: const CircleBorder(),
-                  child: Container(
-                    width: 34,
-                    height: 34,
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.22),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(Icons.tune,
-                        color: Colors.white, size: 18),
-                  ),
-                ),
-              ],
-            ],
-          ),
-        );
-      },
-    );
-
-    return GestureDetector(
-      onTapDown: disabled || continuous
-          ? null
-          : (_) => onPressStart?.call(),
-      onTapUp: disabled || continuous
-          ? null
-          : (_) => onPressEnd?.call(),
-      onTapCancel: disabled || continuous ? null : () => onPressEnd?.call(),
-      onTap: disabled || !continuous ? null : onTap,
-      child: bar,
-    );
-  }
-}
-
-class _LevelMeter extends StatelessWidget {
-  final double level; // 0..10
-  final double threshold; // 0..10
-  final bool speaking;
-  const _LevelMeter({
-    required this.level,
-    required this.threshold,
-    required this.speaking,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return LayoutBuilder(
-      builder: (_, c) {
-        final w = c.maxWidth;
-        final barW = (level / 10).clamp(0.0, 1.0) * w;
-        final tX = (threshold / 10).clamp(0.0, 1.0) * w;
-        return SizedBox(
-          height: 10,
-          child: Stack(
-            children: [
-              Container(
-                decoration: BoxDecoration(
-                  color: cs.surfaceContainerHighest,
-                  borderRadius: BorderRadius.circular(5),
-                ),
-              ),
-              Container(
-                width: barW,
-                decoration: BoxDecoration(
-                  color: speaking ? cs.primary : cs.onSurfaceVariant,
-                  borderRadius: BorderRadius.circular(5),
-                ),
-              ),
-              Positioned(
-                left: tX - 1,
-                top: -2,
-                bottom: -2,
-                child: Container(width: 2, color: cs.error),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-}
-
-/// Two-step provider → model picker used in the config sheet. Filters
-/// providers by [cap] and renders an "Off" option iff [allowOff].
-class _ProviderModelPicker extends StatelessWidget {
-  final Capability cap;
-  final String? providerId;
-  final String modelId;
-  final bool allowOff;
-  final ValueChanged<String?> onProvider;
-  final ValueChanged<String> onModel;
-
-  const _ProviderModelPicker({
-    required this.cap,
-    required this.providerId,
-    required this.modelId,
-    required this.allowOff,
-    required this.onProvider,
-    required this.onModel,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final providers = providersFor(cap).toList();
-    final selected = findProvider(providerId);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        DropdownButtonFormField<String?>(
-          initialValue: providerId,
-          isExpanded: true,
-          decoration: const InputDecoration(
-            labelText: 'Provider',
-            border: OutlineInputBorder(),
-            isDense: true,
-          ),
-          items: [
-            if (allowOff)
-              const DropdownMenuItem<String?>(value: null, child: Text('Off')),
-            for (final p in providers)
-              DropdownMenuItem<String?>(value: p.id, child: Text(p.name)),
-          ],
-          onChanged: onProvider,
-        ),
-        if (selected != null) ...[
-          const SizedBox(height: 8),
-          Builder(builder: (_) {
-            final models = selected.modelsFor(cap).toList();
-            final value = models.any((m) => m.id == modelId)
-                ? modelId
-                : (models.isEmpty ? null : models.first.id);
-            return DropdownButtonFormField<String>(
-              initialValue: value,
-              isExpanded: true,
-              decoration: const InputDecoration(
-                labelText: 'Model',
-                border: OutlineInputBorder(),
-                isDense: true,
-              ),
-              items: models
-                  .map((m) => DropdownMenuItem(
-                        value: m.id,
-                        child:
-                            Text(m.label, overflow: TextOverflow.ellipsis),
-                      ))
-                  .toList(),
-              onChanged: (v) {
-                if (v != null) onModel(v);
-              },
-            );
-          }),
-        ],
-      ],
-    );
-  }
-}
-
-class _EmptyState extends StatelessWidget {
-  final String sceneName;
-  const _EmptyState({required this.sceneName});
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.mic_none, size: 64, color: cs.primary.withValues(alpha: 0.6)),
-            const SizedBox(height: 12),
-            Text(
-              'Scene: $sceneName',
-              style: TextStyle(color: cs.onSurfaceVariant, fontWeight: FontWeight.w600),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Hold the mic to talk, release to send.',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: cs.onSurfaceVariant),
-            ),
-          ],
-        ),
       ),
     );
   }

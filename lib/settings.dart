@@ -124,28 +124,32 @@ class AppSettings extends ChangeNotifier {
   int ttsTimeoutSeconds = 10;
   int historyContextCount = 3;
   bool aecEnabled = true;
+
   /// Inside continuous mode: when true the mic stays open during TTS playback
   /// (full-duplex). Default is false → half-duplex.
   bool continuousFullDuplex = false;
+
   /// When true and the selected chat model accepts audio input, skip STT and
   /// send the recording straight to the chat model. The chat model returns
   /// the corrected/translated text in one round-trip.
   bool audioDirectChat = false;
+
   /// In audio-direct mode: ask the model to return JSON with both the original
   /// audio transcript and the corrected/translated output. The transcript
   /// renders in the user bubble (like a normal STT result); the output goes
   /// to the assistant bubble. Off → assistant bubble carries the output and
   /// the user bubble shows a generic mic placeholder.
   bool audioDirectIncludeTranscript = false;
+
   /// When true (default), the active scene's prompt is injected into the chat
   /// system prompt. Affects both text-mode and audio-direct chat. STT and TTS
   /// are unaffected (scene prompt has no place there).
   bool includeScenePrompt = true;
 
   Scene get activeScene => scenes.firstWhere(
-        (s) => s.id == activeSceneId,
-        orElse: () => scenes.first,
-      );
+    (s) => s.id == activeSceneId,
+    orElse: () => scenes.first,
+  );
 
   Future<SharedPreferences> get _prefs => SharedPreferences.getInstance();
 
@@ -163,10 +167,10 @@ class AppSettings extends ChangeNotifier {
     }
 
     // Chat provider/model — fall back to legacy enum (0=openai, 1=gemini).
-    chatProviderId = p.getString(_kChatProvider) ??
-        _legacyChatProviderId(p) ??
-        'google';
-    chatModelId = p.getString(_kChatModel) ??
+    chatProviderId =
+        p.getString(_kChatProvider) ?? _legacyChatProviderId(p) ?? 'google';
+    chatModelId =
+        p.getString(_kChatModel) ??
         p.getString(_legacyModel) ??
         _firstModelId(chatProviderId!, Capability.chat) ??
         '';
@@ -180,7 +184,8 @@ class AppSettings extends ChangeNotifier {
       sttProviderId = _legacySttProviderId(p);
     }
     if (sttProviderId != null) {
-      sttModelId = p.getString(_kSttModelId) ??
+      sttModelId =
+          p.getString(_kSttModelId) ??
           _legacySttModelId(p, sttProviderId!) ??
           _firstModelId(sttProviderId!, Capability.stt) ??
           '';
@@ -195,11 +200,13 @@ class AppSettings extends ChangeNotifier {
       ttsProviderId = _legacyTtsProviderId(p);
     }
     if (ttsProviderId != null) {
-      ttsModelId = p.getString(_kTtsModelId) ??
+      ttsModelId =
+          p.getString(_kTtsModelId) ??
           _legacyTtsModelId(p, ttsProviderId!) ??
           _firstModelId(ttsProviderId!, Capability.tts) ??
           '';
-      ttsVoice = p.getString(_kTtsVoice) ??
+      ttsVoice =
+          p.getString(_kTtsVoice) ??
           _legacyTtsVoiceValue(p, ttsProviderId!) ??
           _firstVoice(ttsProviderId!, ttsModelId) ??
           '';
@@ -209,10 +216,10 @@ class AppSettings extends ChangeNotifier {
     ttsAutoSpeak = p.getBool(_kTtsAutoSpeak) ?? true;
     ttsVolcSpeechRate = p.getInt(_kTtsVolcSpeechRate) ?? 0;
 
-    voiceMode = VoiceMode.values[p.getInt(_kVoiceMode) ?? 0];
+    voiceMode = _voiceModeFromIndex(p.getInt(_kVoiceMode));
 
     final rawScenes = p.getString(_kScenes);
-    scenes = rawScenes != null ? decodeScenes(rawScenes) : defaultScenes();
+    scenes = _decodeScenesOrDefault(rawScenes);
     if (scenes.isEmpty) scenes = defaultScenes();
     activeSceneId = p.getString(_kActiveScene) ?? scenes.first.id;
     if (!scenes.any((s) => s.id == activeSceneId)) {
@@ -245,8 +252,28 @@ class AppSettings extends ChangeNotifier {
 
   // ---- Legacy migration helpers ----
 
+  VoiceMode _voiceModeFromIndex(int? index) {
+    if (index == null || index < 0 || index >= VoiceMode.values.length) {
+      return VoiceMode.pushToTalk;
+    }
+    return VoiceMode.values[index];
+  }
+
+  List<Scene> _decodeScenesOrDefault(String? raw) {
+    if (raw == null || raw.trim().isEmpty) return defaultScenes();
+    try {
+      final decoded = decodeScenes(raw);
+      return decoded.isEmpty ? defaultScenes() : decoded;
+    } catch (_) {
+      return defaultScenes();
+    }
+  }
+
   String _legacyCredential(
-      SharedPreferences p, String providerId, CredentialField f) {
+    SharedPreferences p,
+    String providerId,
+    CredentialField f,
+  ) {
     switch (providerId) {
       case 'openai':
         if (f == CredentialField.apiKey) {
@@ -410,7 +437,10 @@ class AppSettings extends ChangeNotifier {
   // ---- Setters ----
 
   Future<void> setCredential(
-      String providerId, CredentialField field, String value) async {
+    String providerId,
+    CredentialField field,
+    String value,
+  ) async {
     _credentials.putIfAbsent(providerId, () => {})[field] = value;
     await (await _prefs).setString(_credKey(providerId, field), value);
     notifyListeners();
@@ -474,7 +504,8 @@ class AppSettings extends ChangeNotifier {
     // Reset voice to first voice of new model if the current one isn't valid.
     if (ttsProviderId != null) {
       final m = findProvider(ttsProviderId!)?.findModel(modelId);
-      if (m != null && m.voices.isNotEmpty &&
+      if (m != null &&
+          m.voices.isNotEmpty &&
           !m.voices.any((v) => v.id == ttsVoice)) {
         ttsVoice = m.voices.first.id;
         await p.setString(_kTtsVoice, ttsVoice);
@@ -554,8 +585,7 @@ class AppSettings extends ChangeNotifier {
   /// True iff voice input has somewhere to go: a configured STT provider, or
   /// the audio-direct path. When false, the mic is hidden in favour of the
   /// text input bar.
-  bool get voiceInputAvailable =>
-      sttProviderId != null || audioDirectActive;
+  bool get voiceInputAvailable => sttProviderId != null || audioDirectActive;
 
   Future<void> setMinRecordSeconds(double v) async {
     final clamped = v < 0.1 ? 0.1 : v;
@@ -722,8 +752,9 @@ class AppSettings extends ChangeNotifier {
     final a = translationLangA.trim().isEmpty ? '中文' : translationLangA.trim();
     final b = translationLangB.trim().isEmpty ? '印尼语' : translationLangB.trim();
     final sceneText = activeScene.prompt.trim();
-    final scene =
-        (includeScenePrompt && sceneText.isNotEmpty) ? '$sceneText。' : '';
+    final scene = (includeScenePrompt && sceneText.isNotEmpty)
+        ? '$sceneText。'
+        : '';
     final fused = audioDirectActive;
     final lead = fused ? '' : '用户输入的文字是STT转换的结果，';
     final task = translationEnabled
