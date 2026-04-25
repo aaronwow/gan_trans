@@ -722,209 +722,23 @@ class _ChatScreenState extends State<ChatScreen>
         color: cs.surface,
         border: Border(bottom: BorderSide(color: cs.outlineVariant)),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
         children: [
-          Row(
-            children: [
-              Expanded(
-                child: _PillButton(
-                  icon: Icons.theater_comedy_outlined,
-                  label: s.activeScene.name,
-                  onTap: _openScenes,
-                ),
-              ),
-              const SizedBox(width: 8),
-              _IconPill(
-                icon: Icons.tune,
-                onTap: _openModelSheet,
-              ),
-            ],
+          Expanded(
+            child: _PillButton(
+              icon: Icons.theater_comedy_outlined,
+              label: s.activeScene.name,
+              onTap: _openScenes,
+            ),
           ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              _ChipToggle(
-                icon: s.sttProvider == SttProvider.off
-                    ? Icons.mic_off_outlined
-                    : Icons.mic_none_rounded,
-                label: _sttLabel(s.sttProvider),
-                active: s.sttProvider != SttProvider.off,
-                onTap: _cycleStt,
-              ),
-              _ChipToggle(
-                icon: s.ttsMode == TtsMode.off
-                    ? Icons.volume_off_outlined
-                    : Icons.volume_up_rounded,
-                label: _ttsLabel(s.ttsMode),
-                active: s.ttsMode != TtsMode.off,
-                onTap: _cycleTts,
-              ),
-              _ChipToggle(
-                icon: Icons.translate,
-                label: s.translationEnabled
-                    ? '修正+${_langShort(s.translationLangA)}↔${_langShort(s.translationLangB)}'
-                    : '修正+翻译',
-                active: s.translationEnabled,
-                onTap: _onTranslationTap,
-                onLongPress: _pickTranslationPair,
-              ),
-            ],
+          const SizedBox(width: 8),
+          _IconPill(
+            icon: Icons.tune,
+            onTap: _openConfigSheet,
           ),
         ],
       ),
     );
-  }
-
-  String _ttsLabel(TtsMode m) {
-    switch (m) {
-      case TtsMode.off:
-        return 'TTS Off';
-      case TtsMode.openai:
-        return 'TTS: OpenAI';
-      case TtsMode.volcDoubao:
-        return 'TTS: 豆包';
-    }
-  }
-
-  String _sttLabel(SttProvider p) {
-    switch (p) {
-      case SttProvider.off:
-        return 'STT: Off';
-      case SttProvider.openai:
-        return 'STT: OpenAI';
-      case SttProvider.volcFlash:
-        return 'STT: 豆包';
-    }
-  }
-
-  void _cycleStt() {
-    final s = widget.settings;
-    const order = [SttProvider.openai, SttProvider.volcFlash, SttProvider.off];
-    final next = order[(order.indexOf(s.sttProvider) + 1) % order.length];
-    s.setSttProvider(next);
-  }
-
-  void _cycleTts() {
-    final s = widget.settings;
-    const order = [TtsMode.off, TtsMode.openai, TtsMode.volcDoubao];
-    final next = order[(order.indexOf(s.ttsMode) + 1) % order.length];
-    s.setTtsMode(next);
-  }
-
-  String _langShort(String name) {
-    const map = {
-      '中文': '中',
-      '英语': '英',
-      '印尼语': '印',
-      '日语': '日',
-      '韩语': '韩',
-      '西班牙语': '西',
-      '法语': '法',
-      '德语': '德',
-      '意大利语': '意',
-      '葡萄牙语': '葡',
-      '俄语': '俄',
-      '阿拉伯语': '阿',
-      '泰语': '泰',
-      '越南语': '越',
-    };
-    return map[name] ?? name;
-  }
-
-  Future<void> _onTranslationTap() async {
-    final s = widget.settings;
-    if (s.translationEnabled) {
-      await s.setTranslationEnabled(false);
-    } else {
-      final ok = await _pickTranslationPair();
-      if (ok) await s.setTranslationEnabled(true);
-    }
-  }
-
-  Future<bool> _pickTranslationPair() async {
-    final s = widget.settings;
-    String a = s.translationLangA;
-    String b = s.translationLangB;
-    final confirmed = await showModalBottomSheet<bool>(
-      context: context,
-      showDragHandle: true,
-      isScrollControlled: true,
-      builder: (ctx) {
-        return Padding(
-          padding: EdgeInsets.only(
-            left: 16,
-            right: 16,
-            top: 8,
-            bottom: MediaQuery.of(ctx).viewInsets.bottom + 16,
-          ),
-          child: StatefulBuilder(
-            builder: (ctx, setM) => Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('Translation pair',
-                    style: TextStyle(fontWeight: FontWeight.bold)),
-                const SizedBox(height: 12),
-                DropdownButtonFormField<String>(
-                  initialValue: a,
-                  decoration: const InputDecoration(
-                    labelText: 'Language A',
-                    border: OutlineInputBorder(),
-                  ),
-                  items: kTranslationLanguages
-                      .map((l) => DropdownMenuItem(value: l, child: Text(l)))
-                      .toList(),
-                  onChanged: (v) => setM(() => a = v ?? a),
-                ),
-                const SizedBox(height: 12),
-                DropdownButtonFormField<String>(
-                  initialValue: b,
-                  decoration: const InputDecoration(
-                    labelText: 'Language B',
-                    border: OutlineInputBorder(),
-                  ),
-                  items: kTranslationLanguages
-                      .map((l) => DropdownMenuItem(value: l, child: Text(l)))
-                      .toList(),
-                  onChanged: (v) => setM(() => b = v ?? b),
-                ),
-                const SizedBox(height: 8),
-                if (a == b)
-                  const Padding(
-                    padding: EdgeInsets.only(top: 4),
-                    child: Text('Pick two different languages.',
-                        style: TextStyle(color: Colors.redAccent)),
-                  ),
-                const SizedBox(height: 12),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(ctx, false),
-                      child: const Text('Cancel'),
-                    ),
-                    const SizedBox(width: 8),
-                    FilledButton(
-                      onPressed: a == b ? null : () => Navigator.pop(ctx, true),
-                      child: const Text('Save'),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-    if (confirmed == true) {
-      await s.setTranslationLangA(a);
-      await s.setTranslationLangB(b);
-      return true;
-    }
-    return false;
   }
 
   void _openScenes() {
@@ -934,9 +748,8 @@ class _ChatScreenState extends State<ChatScreen>
     );
   }
 
-  Future<void> _openModelSheet() async {
+  Future<void> _openConfigSheet() async {
     final s = widget.settings;
-    final provider = providerOf(s.provider);
     final ctrl = TextEditingController(text: s.model);
     await showModalBottomSheet(
       context: context,
@@ -951,56 +764,173 @@ class _ChatScreenState extends State<ChatScreen>
             bottom: MediaQuery.of(ctx).viewInsets.bottom + 16,
           ),
           child: StatefulBuilder(
-            builder: (ctx, setM) => Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('Provider',
-                    style: TextStyle(fontWeight: FontWeight.bold)),
-                const SizedBox(height: 8),
-                SegmentedButton<ProviderKind>(
-                  segments: kProviders
-                      .map((p) => ButtonSegment(value: p.kind, label: Text(p.name)))
-                      .toList(),
-                  selected: {s.provider},
-                  onSelectionChanged: (v) {
-                    s.setProvider(v.first);
-                    final suggested = providerOf(v.first).suggestedModels.first;
-                    s.setModel(suggested);
-                    ctrl.text = suggested;
-                    setM(() {});
-                  },
-                ),
-                const SizedBox(height: 16),
-                const Text('Model',
-                    style: TextStyle(fontWeight: FontWeight.bold)),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: ctrl,
-                  decoration: const InputDecoration(
-                    hintText: 'Model id',
-                    border: OutlineInputBorder(),
-                    isDense: true,
-                  ),
-                  onChanged: s.setModel,
-                ),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
+            builder: (ctx, setM) {
+              final provider = providerOf(s.provider);
+              final langsEqual = s.translationLangA == s.translationLangB;
+              return SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    for (final m in provider.suggestedModels)
-                      ActionChip(
-                        label: Text(m),
-                        onPressed: () {
-                          ctrl.text = m;
-                          s.setModel(m);
-                          setM(() {});
-                        },
+                    const Text('LLM',
+                        style: TextStyle(fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 8),
+                    SegmentedButton<ProviderKind>(
+                      segments: kProviders
+                          .map((p) => ButtonSegment(
+                              value: p.kind, label: Text(p.name)))
+                          .toList(),
+                      selected: {s.provider},
+                      onSelectionChanged: (v) {
+                        s.setProvider(v.first);
+                        final suggested =
+                            providerOf(v.first).suggestedModels.first;
+                        s.setModel(suggested);
+                        ctrl.text = suggested;
+                        setM(() {});
+                      },
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: ctrl,
+                      decoration: const InputDecoration(
+                        hintText: 'Model id',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                      onChanged: s.setModel,
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 4,
+                      children: [
+                        for (final m in provider.suggestedModels)
+                          ActionChip(
+                            label: Text(m),
+                            onPressed: () {
+                              ctrl.text = m;
+                              s.setModel(m);
+                              setM(() {});
+                            },
+                          ),
+                      ],
+                    ),
+                    const Divider(height: 28),
+                    const Text('Speech-to-Text',
+                        style: TextStyle(fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 8),
+                    SegmentedButton<SttProvider>(
+                      segments: const [
+                        ButtonSegment(
+                            value: SttProvider.off, label: Text('Off')),
+                        ButtonSegment(
+                            value: SttProvider.openai, label: Text('OpenAI')),
+                        ButtonSegment(
+                            value: SttProvider.volcFlash, label: Text('豆包')),
+                      ],
+                      selected: {s.sttProvider},
+                      onSelectionChanged: (v) {
+                        s.setSttProvider(v.first);
+                        setM(() {});
+                      },
+                    ),
+                    const Divider(height: 28),
+                    const Text('Text-to-Speech',
+                        style: TextStyle(fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 8),
+                    SegmentedButton<TtsMode>(
+                      segments: const [
+                        ButtonSegment(value: TtsMode.off, label: Text('Off')),
+                        ButtonSegment(
+                            value: TtsMode.openai, label: Text('OpenAI')),
+                        ButtonSegment(
+                            value: TtsMode.volcDoubao, label: Text('豆包')),
+                      ],
+                      selected: {s.ttsMode},
+                      onSelectionChanged: (v) {
+                        s.setTtsMode(v.first);
+                        setM(() {});
+                      },
+                    ),
+                    const Divider(height: 28),
+                    Row(
+                      children: [
+                        const Text('修正+翻译',
+                            style: TextStyle(fontWeight: FontWeight.bold)),
+                        const Spacer(),
+                        Switch(
+                          value: s.translationEnabled,
+                          onChanged: langsEqual
+                              ? null
+                              : (v) {
+                                  s.setTranslationEnabled(v);
+                                  setM(() {});
+                                },
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        Expanded(
+                          child: DropdownButtonFormField<String>(
+                            initialValue: s.translationLangA,
+                            isExpanded: true,
+                            decoration: const InputDecoration(
+                              labelText: 'Language A',
+                              border: OutlineInputBorder(),
+                              isDense: true,
+                            ),
+                            items: kTranslationLanguages
+                                .map((l) => DropdownMenuItem(
+                                    value: l, child: Text(l)))
+                                .toList(),
+                            onChanged: (v) {
+                              if (v == null) return;
+                              s.setTranslationLangA(v);
+                              setM(() {});
+                            },
+                          ),
+                        ),
+                        const Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 8),
+                          child: Icon(Icons.swap_horiz, size: 20),
+                        ),
+                        Expanded(
+                          child: DropdownButtonFormField<String>(
+                            initialValue: s.translationLangB,
+                            isExpanded: true,
+                            decoration: const InputDecoration(
+                              labelText: 'Language B',
+                              border: OutlineInputBorder(),
+                              isDense: true,
+                            ),
+                            items: kTranslationLanguages
+                                .map((l) => DropdownMenuItem(
+                                    value: l, child: Text(l)))
+                                .toList(),
+                            onChanged: (v) {
+                              if (v == null) return;
+                              s.setTranslationLangB(v);
+                              setM(() {});
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (langsEqual)
+                      const Padding(
+                        padding: EdgeInsets.only(top: 8),
+                        child: Text('Pick two different languages.',
+                            style: TextStyle(
+                                color: Colors.redAccent, fontSize: 12)),
                       ),
                   ],
                 ),
-              ],
-            ),
+              );
+            },
           ),
         );
       },
@@ -1574,48 +1504,6 @@ class _IconPill extends StatelessWidget {
           borderRadius: BorderRadius.circular(24),
         ),
         child: Icon(icon, size: 20, color: cs.onSurfaceVariant),
-      ),
-    );
-  }
-}
-
-class _ChipToggle extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final bool active;
-  final VoidCallback onTap;
-  final VoidCallback? onLongPress;
-  const _ChipToggle({
-    required this.icon,
-    required this.label,
-    required this.active,
-    required this.onTap,
-    this.onLongPress,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final bg = active ? cs.primary : cs.surfaceContainerHighest;
-    final fg = active ? cs.onPrimary : cs.onSurfaceVariant;
-    return InkWell(
-      onTap: onTap,
-      onLongPress: onLongPress,
-      borderRadius: BorderRadius.circular(20),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: bg,
-          borderRadius: BorderRadius.circular(20),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 16, color: fg),
-            const SizedBox(width: 6),
-            Text(label, style: TextStyle(color: fg, fontWeight: FontWeight.w600, fontSize: 13)),
-          ],
-        ),
       ),
     );
   }

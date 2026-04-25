@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'settings.dart';
 import 'chat_screen.dart';
 
-final RouteObserver<ModalRoute<void>> routeObserver =
-    RouteObserver<ModalRoute<void>>();
+final RouteObserver<PageRoute<void>> routeObserver =
+    RouteObserver<PageRoute<void>>();
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
