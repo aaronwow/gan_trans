@@ -760,18 +760,21 @@ class AppSettings extends ChangeNotifier {
     final task = translationEnabled
         ? '如果输入是$a，翻译成$b；如果输入是$b，翻译成$a。'
         : '修正输入文字。';
+    final outputRule = translationEnabled
+        ? '只输出最终翻译后的内容，不要包含原文、解释、标签、引号、Markdown 或任何额外文字。'
+        : '只输出修正后的文字，不要包含解释、标签、引号、Markdown 或任何额外文字。';
 
     if (fused && audioDirectIncludeTranscript) {
       // Strict JSON schema: transcript = ASR-style raw transcription, output =
       // corrected/translated text. Timecodes/markdown explicitly forbidden so
       // Gemini doesn't prepend "00:00" / append "00:04" timestamps.
       return '$scene$task严格按以下 JSON 输出，不要使用 Markdown 代码块，不要包含任何时间戳或时间码（例如 00:00、00:04）：'
-          '{"transcript": "音频的原始转录文字", "output": "修正/翻译后的文字"}';
+          '{"transcript": "音频的原始转录文字", "output": "最终翻译后的内容或修正后的文字"}';
     }
     if (fused) {
-      return '$scene$task只输出修正后的文字，不要包含任何时间戳或时间码（例如 00:00、00:04），不要使用 Markdown 代码块。';
+      return '$scene$task$outputRule不要包含任何时间戳或时间码（例如 00:00、00:04）。';
     }
-    return '$lead$scene$task只输出修正后的文字。';
+    return '$lead$scene$task$outputRule';
   }
 }
 
