@@ -325,6 +325,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
             },
           ),
           const SizedBox(height: 24),
+          const Text('Microphone',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          const SizedBox(height: 8),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Acoustic echo cancellation'),
+            subtitle: const Text(
+              'Suppresses speaker → mic feedback during full-duplex playback. '
+              'Uses iOS VoiceProcessingIO / Android AcousticEchoCanceler.',
+            ),
+            value: s.aecEnabled,
+            onChanged: (v) {
+              s.setAecEnabled(v);
+              setState(() {});
+            },
+          ),
+          const SizedBox(height: 24),
           const Text('Voice Activity Detection (VAD)',
               style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
           const SizedBox(height: 8),

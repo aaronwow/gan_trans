@@ -56,6 +56,15 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   String? _currentRecordingPath;
   DateTime? _recordStartedAt;
   int? _speakingTurnId;
+  // True while the user has the continuous-mode loop "armed". In half-duplex
+  // continuous, the mic auto-resumes after the pipeline goes idle as long as
+  // this stays true. In full-duplex continuous it tracks the same intent but
+  // restart is handled inline by _autoCut.
+  bool _continuousLoopActive = false;
+  // Number of TTS clips queued or in-flight (queued but not yet finished).
+  // Used by half-duplex idle detection so the mic doesn't reopen between
+  // "LLM done" and "audio playback started".
+  int _ttsPending = 0;
 
   // Continuous / VAD state.
   bool _speakingNow = false;
@@ -83,12 +92,46 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       if (!playing && mounted && _speakingTurnId != null) {
         setState(() => _speakingTurnId = null);
       }
+      if (!playing) _maybeResumeHalfDuplex();
     });
+  }
+
+  // ---------- Half-duplex idle/resume ----------
+
+  bool _pipelineBusy() {
+    for (final t in _turns) {
+      if (t.state == TurnState.transcribing ||
+          t.state == TurnState.waitingLlm ||
+          t.state == TurnState.sending) {
+        return true;
+      }
+    }
+    if (_tts.isPlaying) return true;
+    if (_ttsPending > 0) return true;
+    return false;
+  }
+
+  bool _isHalfDuplexContinuous() {
+    final s = widget.settings;
+    return s.voiceMode == VoiceMode.continuous && !s.continuousFullDuplex;
+  }
+
+  void _maybeResumeHalfDuplex() {
+    if (!mounted) return;
+    if (!_isHalfDuplexContinuous()) return;
+    if (!_continuousLoopActive) return;
+    if (_listening || _autoRestarting) return;
+    if (widget.settings.sttProvider == SttProvider.off) return;
+    if (_pipelineBusy()) return;
+    unawaited(_startListening());
   }
 
   void _onSettingsChanged() {
     if (widget.settings.sttProvider == SttProvider.off && _listening) {
       unawaited(_cutAndProcess());
+    }
+    if (widget.settings.voiceMode != VoiceMode.continuous) {
+      _continuousLoopActive = false;
     }
     setState(() {});
   }
@@ -118,11 +161,26 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     final path =
         '${dir.path}/rec_${DateTime.now().millisecondsSinceEpoch}.$_recordFormat';
     try {
+      final aec = widget.settings.aecEnabled;
       await _recorder.start(
-        const RecordConfig(
+        RecordConfig(
           encoder: AudioEncoder.wav,
           sampleRate: 16000,
           numChannels: 1,
+          // System AEC: iOS uses VoiceProcessingIO; Android uses
+          // AcousticEchoCanceler — only effective when paired with the
+          // voiceCommunication audio source + modeInCommunication.
+          echoCancel: aec,
+          noiseSuppress: aec,
+          autoGain: aec,
+          androidConfig: AndroidRecordConfig(
+            audioSource: aec
+                ? AndroidAudioSource.voiceCommunication
+                : AndroidAudioSource.defaultSource,
+            audioManagerMode: aec
+                ? AudioManagerMode.modeInCommunication
+                : AudioManagerMode.modeNormal,
+          ),
         ),
         path: path,
       );
@@ -183,7 +241,12 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     _autoRestarting = true;
     try {
       await _cutAndProcess();
-      if (mounted && widget.settings.voiceMode == VoiceMode.continuous) {
+      // In full-duplex continuous mode the mic reopens immediately so the
+      // user can keep talking. In half-duplex it stays closed until the
+      // pipeline (STT/LLM/TTS) finishes — see _maybeResumeHalfDuplex.
+      if (mounted &&
+          widget.settings.voiceMode == VoiceMode.continuous &&
+          widget.settings.continuousFullDuplex) {
         await _startListening();
       }
     } finally {
@@ -290,6 +353,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     } finally {
       t.stopper = null;
       client.close();
+      _maybeResumeHalfDuplex();
     }
   }
 
@@ -387,6 +451,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     } finally {
       t.stopper = null;
       netClient.close();
+      _maybeResumeHalfDuplex();
     }
   }
 
@@ -450,21 +515,29 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
 
   void _queueSpeak(String text, {int? turnId}) {
     final prev = _ttsChain;
+    _ttsPending++;
     _ttsChain = () async {
       try {
         await prev;
       } catch (_) {}
-      if (!mounted) return;
-      // Wait until any currently playing clip finishes before starting the next.
-      await _tts.waitForIdle();
-      if (!mounted) return;
-      await _speakText(text, turnId: turnId);
-      await _tts.waitForIdle();
+      try {
+        if (!mounted) return;
+        // Wait until any currently playing clip finishes before starting the next.
+        await _tts.waitForIdle();
+        if (!mounted) return;
+        await _speakText(text, turnId: turnId);
+        await _tts.waitForIdle();
+      } finally {
+        _ttsPending = (_ttsPending - 1).clamp(0, 1 << 30);
+        _maybeResumeHalfDuplex();
+      }
     }();
   }
 
   void _cancelTtsQueue() {
     _ttsChain = Future<void>.value();
+    // Clipped chains never run their finally blocks, so reset the counter.
+    _ttsPending = 0;
   }
 
   Future<void> _speakText(String text, {int? turnId}) async {
@@ -508,6 +581,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   Future<void> _toggleVoiceMode() async {
     final s = widget.settings;
     if (_listening) await _cutAndProcess();
+    _continuousLoopActive = false;
     await s.setVoiceMode(
       s.voiceMode == VoiceMode.continuous
           ? VoiceMode.pushToTalk
@@ -1157,7 +1231,8 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     final cs = Theme.of(context).colorScheme;
     if (s.sttProvider == SttProvider.off) return _textInputBar();
     final isContinuous = s.voiceMode == VoiceMode.continuous;
-    final status = _statusLabel(isContinuous);
+    final isHalfDuplex = isContinuous && !s.continuousFullDuplex;
+    final status = _statusLabel(s.voiceMode);
 
     final modeButton = _ModeToggleButton(
       mode: s.voiceMode,
@@ -1165,7 +1240,9 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     );
     final mic = Expanded(
       child: _MicBar(
-        listening: _listening || (isContinuous && _autoRestarting),
+        listening: _listening ||
+            (isContinuous && s.continuousFullDuplex && _autoRestarting) ||
+            (isHalfDuplex && _continuousLoopActive),
         enabled: true,
         continuous: isContinuous,
         level: _soundLevel,
@@ -1176,10 +1253,24 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
         onPressEnd: isContinuous ? null : _cutAndProcess,
         onTap: isContinuous
             ? () {
-                if (_listening) {
-                  _cutAndProcess();
+                if (isHalfDuplex) {
+                  if (_continuousLoopActive) {
+                    _continuousLoopActive = false;
+                    if (_listening) _cutAndProcess();
+                    setState(() {});
+                  } else {
+                    _continuousLoopActive = true;
+                    if (!_pipelineBusy() && !_listening) _startListening();
+                    setState(() {});
+                  }
                 } else {
-                  _startListening();
+                  if (_listening) {
+                    _continuousLoopActive = false;
+                    _cutAndProcess();
+                  } else {
+                    _continuousLoopActive = true;
+                    _startListening();
+                  }
                 }
               }
             : null,
@@ -1204,6 +1295,16 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                   level: _soundLevel,
                   threshold: s.vadThresholdLevel,
                   speaking: _speakingNow,
+                ),
+              ),
+            if (isContinuous)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: _DuplexFilter(
+                  fullDuplex: s.continuousFullDuplex,
+                  onChanged: (v) async {
+                    await s.setContinuousFullDuplex(v);
+                  },
                 ),
               ),
             Padding(
@@ -1273,13 +1374,19 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     );
   }
 
-  String _statusLabel(bool isContinuous) {
+  String _statusLabel(VoiceMode mode) {
+    final s = widget.settings;
     final pending = _turns.where((t) =>
         t.state == TurnState.transcribing ||
         t.state == TurnState.waitingLlm ||
         t.state == TurnState.sending).length;
     final pendingSuffix = pending > 0 ? ' · $pending in flight' : '';
-    if (isContinuous) {
+    if (mode == VoiceMode.pushToTalk) {
+      final base = _listening ? 'Release to send' : 'Hold to talk';
+      return '$base$pendingSuffix';
+    }
+    // continuous mode
+    if (s.continuousFullDuplex) {
       if (_listening || _autoRestarting) {
         final base =
             _speakingNow ? 'Listening…' : 'Silent (auto-send on pause)';
@@ -1287,8 +1394,18 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       }
       return 'Tap to start continuous listening$pendingSuffix';
     }
-    final base = _listening ? 'Release to send' : 'Hold to talk';
-    return '$base$pendingSuffix';
+    // half-duplex inside continuous
+    if (!_continuousLoopActive) {
+      return 'Tap to start half-duplex listening$pendingSuffix';
+    }
+    if (_listening) {
+      final base =
+          _speakingNow ? 'Listening…' : 'Silent (auto-send on pause)';
+      return '$base$pendingSuffix';
+    }
+    if (_tts.isPlaying) return 'Speaking — mic paused$pendingSuffix';
+    if (_pipelineBusy()) return 'Processing — mic paused$pendingSuffix';
+    return 'Resuming…$pendingSuffix';
   }
 
   // ---------- Build ----------
@@ -1480,6 +1597,35 @@ class _ModeToggleButton extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Segmented filter shown only in continuous mode — picks half- vs full-duplex.
+class _DuplexFilter extends StatelessWidget {
+  final bool fullDuplex;
+  final ValueChanged<bool> onChanged;
+  const _DuplexFilter({required this.fullDuplex, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return SegmentedButton<bool>(
+      style: const ButtonStyle(visualDensity: VisualDensity.compact),
+      segments: const [
+        ButtonSegment(
+          value: false,
+          icon: Icon(Icons.compare_arrows, size: 16),
+          label: Text('Half-duplex'),
+        ),
+        ButtonSegment(
+          value: true,
+          icon: Icon(Icons.swap_horiz, size: 16),
+          label: Text('Full-duplex'),
+        ),
+      ],
+      selected: {fullDuplex},
+      showSelectedIcon: false,
+      onSelectionChanged: (set) => onChanged(set.first),
     );
   }
 }

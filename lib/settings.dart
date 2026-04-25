@@ -5,6 +5,11 @@ import 'scenes.dart';
 import 'stt_service.dart';
 import 'tts_service.dart';
 
+/// Voice modes:
+/// - [pushToTalk]: hold a button to record, release to send.
+/// - [continuous]: VAD-driven loop. The duplex behaviour inside this mode is
+///   controlled by [AppSettings.continuousFullDuplex] — half-duplex by
+///   default (mic mutes during processing + playback).
 enum VoiceMode { pushToTalk, continuous }
 
 const kTranslationLanguages = <String>[
@@ -59,6 +64,8 @@ class AppSettings extends ChangeNotifier {
   static const _kLlmTimeout = 'llm_timeout_seconds';
   static const _kTtsTimeout = 'tts_timeout_seconds';
   static const _kHistoryContextCount = 'history_context_count';
+  static const _kAecEnabled = 'aec_enabled';
+  static const _kContinuousFullDuplex = 'continuous_full_duplex';
 
   String openAiKey = '';
   String geminiKey = '';
@@ -94,6 +101,11 @@ class AppSettings extends ChangeNotifier {
   int llmTimeoutSeconds = 10;
   int ttsTimeoutSeconds = 10;
   int historyContextCount = 3;
+  bool aecEnabled = true;
+  /// Inside continuous mode: when true the mic stays open during TTS playback
+  /// (full-duplex). Default is false → half-duplex (mic mutes while the
+  /// pipeline processes or plays the previous reply). User-toggleable.
+  bool continuousFullDuplex = false;
 
   Scene get activeScene =>
       scenes.firstWhere((s) => s.id == activeSceneId, orElse: () => scenes.first);
@@ -151,6 +163,20 @@ class AppSettings extends ChangeNotifier {
     llmTimeoutSeconds = p.getInt(_kLlmTimeout) ?? 10;
     ttsTimeoutSeconds = p.getInt(_kTtsTimeout) ?? 10;
     historyContextCount = p.getInt(_kHistoryContextCount) ?? 3;
+    aecEnabled = p.getBool(_kAecEnabled) ?? true;
+    continuousFullDuplex = p.getBool(_kContinuousFullDuplex) ?? false;
+    notifyListeners();
+  }
+
+  Future<void> setAecEnabled(bool v) async {
+    aecEnabled = v;
+    await (await _prefs).setBool(_kAecEnabled, v);
+    notifyListeners();
+  }
+
+  Future<void> setContinuousFullDuplex(bool v) async {
+    continuousFullDuplex = v;
+    await (await _prefs).setBool(_kContinuousFullDuplex, v);
     notifyListeners();
   }
 
