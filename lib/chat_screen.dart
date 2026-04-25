@@ -119,6 +119,7 @@ class _ChatScreenState extends State<ChatScreen>
       showDragHandle: true,
       isScrollControlled: true,
       builder: (ctx) {
+        final cs = Theme.of(ctx).colorScheme;
         return Padding(
           padding: EdgeInsets.only(
             left: 16,
@@ -136,6 +137,46 @@ class _ChatScreenState extends State<ChatScreen>
                   style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                 ),
                 const SizedBox(height: 12),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: cs.surfaceContainerHighest.withValues(alpha: 0.45),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Conversation mode',
+                        style: TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        s.continuousFullDuplex
+                            ? 'Full-duplex keeps listening while replies can play.'
+                            : 'Half-duplex pauses listening while the assistant replies.',
+                        style: TextStyle(
+                          color: cs.onSurfaceVariant,
+                          fontSize: 12,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      SizedBox(
+                        width: double.infinity,
+                        child: _DuplexFilter(
+                          fullDuplex: s.continuousFullDuplex,
+                          onChanged: (v) async {
+                            await s.setContinuousFullDuplex(v);
+                            setM(() {});
+                            if (mounted) setState(() {});
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
                 Text(
                   'Silence cutoff: ${s.vadPauseSeconds.toStringAsFixed(1)}s',
                   style: const TextStyle(fontWeight: FontWeight.w600),
@@ -171,10 +212,7 @@ class _ChatScreenState extends State<ChatScreen>
                 Text(
                   'Segments are cut after ${s.vadPauseSeconds.toStringAsFixed(1)}s of silence '
                   'below threshold, then auto-sent.',
-                  style: TextStyle(
-                    color: Theme.of(ctx).colorScheme.onSurfaceVariant,
-                    fontSize: 12,
-                  ),
+                  style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12),
                 ),
               ],
             ),
@@ -226,25 +264,70 @@ class _ChatScreenState extends State<ChatScreen>
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
+      backgroundColor: Theme.of(context).colorScheme.surface,
       builder: (ctx) {
-        return Padding(
-          padding: EdgeInsets.only(
-            left: 16,
-            right: 16,
-            top: 8,
-            bottom: MediaQuery.of(ctx).viewInsets.bottom + 16,
-          ),
-          child: StatefulBuilder(
-            builder: (ctx, setM) {
-              final langsEqual = s.translationLangA == s.translationLangB;
-              return SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
+        final cs = Theme.of(ctx).colorScheme;
+        return DraggableScrollableSheet(
+          expand: false,
+          initialChildSize: 0.82,
+          minChildSize: 0.42,
+          maxChildSize: 0.94,
+          builder: (ctx, scrollController) => Padding(
+            padding: EdgeInsets.only(
+              left: 16,
+              right: 16,
+              top: 4,
+              bottom: MediaQuery.of(ctx).viewInsets.bottom + 16,
+            ),
+            child: StatefulBuilder(
+              builder: (ctx, setM) {
+                final langsEqual = s.translationLangA == s.translationLangB;
+                return ListView(
+                  controller: scrollController,
                   children: [
+                    Row(
+                      children: [
+                        Container(
+                          width: 38,
+                          height: 38,
+                          decoration: BoxDecoration(
+                            color: cs.primaryContainer,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Icon(
+                            Icons.tune,
+                            color: cs.onPrimaryContainer,
+                            size: 20,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        const Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Model routing',
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                              SizedBox(height: 2),
+                              Text(
+                                'Choose models for chat, speech, and playback.',
+                                style: TextStyle(fontSize: 12),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
                     _sheetSection(
-                      'Chat',
-                      Column(
+                      icon: Icons.chat_bubble_outline,
+                      title: 'Chat',
+                      subtitle: 'Assistant model and prompt handling',
+                      child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           _ProviderModelPicker(
@@ -261,26 +344,22 @@ class _ChatScreenState extends State<ChatScreen>
                               setM(() {});
                             },
                           ),
-                          SwitchListTile(
-                            contentPadding: EdgeInsets.zero,
-                            dense: true,
-                            title: const Text('Include scene prompt'),
+                          const SizedBox(height: 10),
+                          _sheetSwitch(
+                            title: 'Include scene prompt',
+                            subtitle:
+                                'Attach the active scene to each chat turn.',
                             value: s.includeScenePrompt,
                             onChanged: (v) async {
                               await s.setIncludeScenePrompt(v);
                               setM(() {});
                             },
                           ),
-                          SwitchListTile(
-                            contentPadding: EdgeInsets.zero,
-                            dense: true,
-                            title: const Text('Audio direct (skip STT)'),
+                          _sheetSwitch(
+                            title: 'Audio direct',
                             subtitle: s.chatModelAcceptsAudio
-                                ? null
-                                : const Text(
-                                    'Current chat model has no audio input.',
-                                    style: TextStyle(fontSize: 11),
-                                  ),
+                                ? 'Send recordings straight to chat and skip STT.'
+                                : 'Current chat model has no audio input.',
                             value: s.audioDirectChat && s.chatModelAcceptsAudio,
                             onChanged: s.chatModelAcceptsAudio
                                 ? (v) async {
@@ -290,28 +369,25 @@ class _ChatScreenState extends State<ChatScreen>
                                 : null,
                           ),
                           if (s.audioDirectActive)
-                            Padding(
-                              padding: const EdgeInsets.only(left: 16),
-                              child: SwitchListTile(
-                                contentPadding: EdgeInsets.zero,
-                                dense: true,
-                                title: const Text(
-                                  'Return original transcript (JSON)',
-                                ),
-                                value: s.audioDirectIncludeTranscript,
-                                onChanged: (v) async {
-                                  await s.setAudioDirectIncludeTranscript(v);
-                                  setM(() {});
-                                },
-                              ),
+                            _sheetSwitch(
+                              title: 'Return original transcript',
+                              subtitle:
+                                  'Ask for JSON containing raw and final text.',
+                              value: s.audioDirectIncludeTranscript,
+                              onChanged: (v) async {
+                                await s.setAudioDirectIncludeTranscript(v);
+                                setM(() {});
+                              },
                             ),
                         ],
                       ),
                     ),
-                    const Divider(height: 28),
+                    const SizedBox(height: 12),
                     _sheetSection(
-                      'Speech-to-Text',
-                      _ProviderModelPicker(
+                      icon: Icons.graphic_eq,
+                      title: 'Speech-to-Text',
+                      subtitle: 'Recognition provider for microphone input',
+                      child: _ProviderModelPicker(
                         cap: Capability.stt,
                         providerId: s.sttProviderId,
                         modelId: s.sttModelId,
@@ -326,10 +402,12 @@ class _ChatScreenState extends State<ChatScreen>
                         },
                       ),
                     ),
-                    const Divider(height: 28),
+                    const SizedBox(height: 12),
                     _sheetSection(
-                      'Text-to-Speech',
-                      _ProviderModelPicker(
+                      icon: Icons.volume_up_outlined,
+                      title: 'Text-to-Speech',
+                      subtitle: 'Voice model used for assistant replies',
+                      child: _ProviderModelPicker(
                         cap: Capability.tts,
                         providerId: s.ttsProviderId,
                         modelId: s.ttsModelId,
@@ -344,112 +422,215 @@ class _ChatScreenState extends State<ChatScreen>
                         },
                       ),
                     ),
-                    const Divider(height: 28),
-                    Row(
-                      children: [
-                        const Text(
-                          '修正+翻译',
-                          style: TextStyle(fontWeight: FontWeight.bold),
-                        ),
-                        const Spacer(),
-                        Switch(
-                          value: s.translationEnabled,
-                          onChanged: langsEqual
-                              ? null
-                              : (v) {
-                                  s.setTranslationEnabled(v);
-                                  setM(() {});
-                                },
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      children: [
-                        Expanded(
-                          child: DropdownButtonFormField<String>(
-                            initialValue: s.translationLangA,
-                            isExpanded: true,
-                            decoration: const InputDecoration(
-                              labelText: 'Language A',
-                              border: OutlineInputBorder(),
-                              isDense: true,
-                            ),
-                            items: kTranslationLanguages
-                                .map(
-                                  (l) => DropdownMenuItem(
-                                    value: l,
-                                    child: Text(l),
-                                  ),
-                                )
-                                .toList(),
-                            onChanged: (v) {
-                              if (v == null) return;
-                              s.setTranslationLangA(v);
-                              setM(() {});
-                            },
-                          ),
-                        ),
-                        const Padding(
-                          padding: EdgeInsets.symmetric(horizontal: 8),
-                          child: Icon(Icons.swap_horiz, size: 20),
-                        ),
-                        Expanded(
-                          child: DropdownButtonFormField<String>(
-                            initialValue: s.translationLangB,
-                            isExpanded: true,
-                            decoration: const InputDecoration(
-                              labelText: 'Language B',
-                              border: OutlineInputBorder(),
-                              isDense: true,
-                            ),
-                            items: kTranslationLanguages
-                                .map(
-                                  (l) => DropdownMenuItem(
-                                    value: l,
-                                    child: Text(l),
-                                  ),
-                                )
-                                .toList(),
-                            onChanged: (v) {
-                              if (v == null) return;
-                              s.setTranslationLangB(v);
-                              setM(() {});
-                            },
-                          ),
-                        ),
-                      ],
-                    ),
-                    if (langsEqual)
-                      const Padding(
-                        padding: EdgeInsets.only(top: 8),
-                        child: Text(
-                          'Pick two different languages.',
-                          style: TextStyle(
-                            color: Colors.redAccent,
-                            fontSize: 12,
-                          ),
-                        ),
+                    const SizedBox(height: 12),
+                    _sheetSection(
+                      icon: Icons.translate,
+                      title: '修正+翻译',
+                      subtitle: 'Pick a language pair for corrected output',
+                      trailing: Switch(
+                        value: s.translationEnabled,
+                        onChanged: langsEqual
+                            ? null
+                            : (v) {
+                                s.setTranslationEnabled(v);
+                                setM(() {});
+                              },
                       ),
+                      child: Column(
+                        children: [
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              Expanded(
+                                child: DropdownButtonFormField<String>(
+                                  initialValue: s.translationLangA,
+                                  isExpanded: true,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Language A',
+                                    isDense: true,
+                                  ),
+                                  items: kTranslationLanguages
+                                      .map(
+                                        (l) => DropdownMenuItem(
+                                          value: l,
+                                          child: Text(l),
+                                        ),
+                                      )
+                                      .toList(),
+                                  onChanged: (v) {
+                                    if (v == null) return;
+                                    s.setTranslationLangA(v);
+                                    setM(() {});
+                                  },
+                                ),
+                              ),
+                              Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                ),
+                                child: Icon(
+                                  Icons.swap_horiz,
+                                  size: 20,
+                                  color: cs.onSurfaceVariant,
+                                ),
+                              ),
+                              Expanded(
+                                child: DropdownButtonFormField<String>(
+                                  initialValue: s.translationLangB,
+                                  isExpanded: true,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Language B',
+                                    isDense: true,
+                                  ),
+                                  items: kTranslationLanguages
+                                      .map(
+                                        (l) => DropdownMenuItem(
+                                          value: l,
+                                          child: Text(l),
+                                        ),
+                                      )
+                                      .toList(),
+                                  onChanged: (v) {
+                                    if (v == null) return;
+                                    s.setTranslationLangB(v);
+                                    setM(() {});
+                                  },
+                                ),
+                              ),
+                            ],
+                          ),
+                          if (langsEqual)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 10),
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    Icons.info_outline,
+                                    size: 16,
+                                    color: cs.error,
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    'Pick two different languages.',
+                                    style: TextStyle(
+                                      color: cs.error,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
                   ],
-                ),
-              );
-            },
+                );
+              },
+            ),
           ),
         );
       },
     );
   }
 
-  Widget _sheetSection(String title, Widget child) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
-        const SizedBox(height: 8),
-        child,
-      ],
+  Widget _sheetSection({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required Widget child,
+    Widget? trailing,
+  }) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerLowest,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.7)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: cs.secondaryContainer.withValues(alpha: 0.72),
+                  borderRadius: BorderRadius.circular(11),
+                ),
+                child: Icon(icon, size: 18, color: cs.onSecondaryContainer),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 15,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        color: cs.onSurfaceVariant,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              ?trailing,
+            ],
+          ),
+          const SizedBox(height: 14),
+          child,
+        ],
+      ),
+    );
+  }
+
+  Widget _sheetSwitch({
+    required String title,
+    required String subtitle,
+    required bool value,
+    required ValueChanged<bool>? onChanged,
+  }) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerHighest.withValues(alpha: 0.36),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  subtitle,
+                  style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+          Switch(value: value, onChanged: onChanged),
+        ],
+      ),
     );
   }
 
@@ -779,16 +960,6 @@ class _ChatScreenState extends State<ChatScreen>
                   level: _chat.soundLevel,
                   threshold: s.vadThresholdLevel,
                   speaking: _chat.speakingNow,
-                ),
-              ),
-            if (isContinuous)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 6),
-                child: _DuplexFilter(
-                  fullDuplex: s.continuousFullDuplex,
-                  onChanged: (v) async {
-                    await s.setContinuousFullDuplex(v);
-                  },
                 ),
               ),
             Padding(

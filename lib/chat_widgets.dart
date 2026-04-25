@@ -328,7 +328,6 @@ class _ProviderModelPicker extends StatelessWidget {
           isExpanded: true,
           decoration: const InputDecoration(
             labelText: 'Provider',
-            border: OutlineInputBorder(),
             isDense: true,
           ),
           items: [
@@ -352,7 +351,6 @@ class _ProviderModelPicker extends StatelessWidget {
                 isExpanded: true,
                 decoration: const InputDecoration(
                   labelText: 'Model',
-                  border: OutlineInputBorder(),
                   isDense: true,
                 ),
                 items: models
