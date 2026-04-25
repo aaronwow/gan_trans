@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -6,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
+import 'catalog.dart';
 import 'main.dart';
 import 'providers.dart';
 import 'scenes_screen.dart';
@@ -35,8 +37,15 @@ class ChatTurn {
   bool errorExpanded = false;
   http.Client? stopper; // closes to abort in-flight STT or LLM request
   bool cancelled = false; // set when user hits Cancel
-  ChatTurn({required this.id, required this.audioPath, this.audioFormat = 'wav'})
-      : state = TurnState.transcribing;
+  /// True when this turn was sent in audio-direct mode: the recording was
+  /// fed straight to the chat model (no STT step). Drives bubble rendering.
+  final bool fusedAudio;
+  ChatTurn({
+    required this.id,
+    required this.audioPath,
+    this.audioFormat = 'wav',
+    this.fusedAudio = false,
+  }) : state = fusedAudio ? TurnState.sending : TurnState.transcribing;
 }
 
 class _ChatScreenState extends State<ChatScreen>
@@ -134,7 +143,7 @@ class _ChatScreenState extends State<ChatScreen>
     _resumeLoopOnReturn = false;
     final s = widget.settings;
     if (s.voiceMode != VoiceMode.continuous) return;
-    if (s.sttProvider == SttProvider.off) return;
+    if (!s.voiceInputAvailable) return;
     _continuousLoopActive = true;
     if (s.continuousFullDuplex) {
       if (!_pipelineBusy() && !_listening) {
@@ -171,13 +180,13 @@ class _ChatScreenState extends State<ChatScreen>
     if (!_isHalfDuplexContinuous()) return;
     if (!_continuousLoopActive) return;
     if (_listening || _autoRestarting) return;
-    if (widget.settings.sttProvider == SttProvider.off) return;
+    if (!widget.settings.voiceInputAvailable) return;
     if (_pipelineBusy()) return;
     unawaited(_startListening());
   }
 
   void _onSettingsChanged() {
-    if (widget.settings.sttProvider == SttProvider.off && _listening) {
+    if (!widget.settings.voiceInputAvailable && _listening) {
       unawaited(_cutAndProcess());
     }
     if (widget.settings.voiceMode != VoiceMode.continuous) {
@@ -352,16 +361,22 @@ class _ChatScreenState extends State<ChatScreen>
       return;
     }
 
+    final fused = widget.settings.audioDirectActive;
     final turn = ChatTurn(
       id: _nextTurnId++,
       audioPath: recorded,
       audioFormat: _recordFormat,
+      fusedAudio: fused,
     );
     setState(() => _turns.add(turn));
     _scrollToBottom();
-    unawaited(_runStt(turn).then((ok) {
-      if (ok) _scheduleLlm(turn);
-    }));
+    if (fused) {
+      unawaited(_runFusedChat(turn));
+    } else {
+      unawaited(_runStt(turn).then((ok) {
+        if (ok) _scheduleLlm(turn);
+      }));
+    }
   }
 
   // ---------- Per-turn pipeline ----------
@@ -377,10 +392,14 @@ class _ChatScreenState extends State<ChatScreen>
       t.lastError = null;
     });
     try {
+      final sttReq = widget.settings.buildSttRequest();
+      if (sttReq == null) {
+        throw StateError('STT is off — pick a provider in Settings.');
+      }
       final text = await _stt.transcribe(
         filePath: t.audioPath!,
         format: t.audioFormat,
-        config: widget.settings.sttConfig(),
+        request: sttReq,
         client: client,
         timeout: Duration(seconds: widget.settings.sttTimeoutSeconds),
       );
@@ -424,20 +443,156 @@ class _ChatScreenState extends State<ChatScreen>
     }();
   }
 
-  Future<void> _runLlm(ChatTurn t) async {
+  /// Tolerant JSON extractor for audio-direct + transcript mode. Strips
+  /// ```json fences```, locates the first {...} block, and pulls out
+  /// `transcript` and `output` (also accepts a few aliases). Returns
+  /// `(transcript, output)` or null if nothing usable was found.
+  (String, String)? _parseFusedJson(String reply) {
+    var s = reply.trim();
+    // Strip markdown code fences if present.
+    final fence = RegExp(r'^```(?:json)?\s*([\s\S]*?)\s*```$', multiLine: true);
+    final fm = fence.firstMatch(s);
+    if (fm != null) s = fm.group(1)!.trim();
+    // Slice from first '{' to last '}' so leading/trailing prose is ignored.
+    final start = s.indexOf('{');
+    final end = s.lastIndexOf('}');
+    if (start < 0 || end <= start) return null;
+    final blob = s.substring(start, end + 1);
+    try {
+      final obj = jsonDecode(blob);
+      if (obj is! Map) return null;
+      final transcript = (obj['transcript'] ??
+              obj['original'] ??
+              obj['input'] ??
+              obj['source'] ??
+              '')
+          .toString()
+          .trim();
+      final output = (obj['output'] ??
+              obj['translation'] ??
+              obj['result'] ??
+              obj['text'] ??
+              '')
+          .toString()
+          .trim();
+      if (output.isEmpty && transcript.isEmpty) return null;
+      return (transcript, output.isEmpty ? transcript : output);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Audio-direct path: send the recording straight to the chat model with
+  /// the system prompt, in a single round-trip. Replaces both the STT step
+  /// and the LLM step.
+  Future<void> _runFusedChat(ChatTurn t) async {
     final s = widget.settings;
-    final useTranslation = s.translationEnabled;
-    final providerKind = useTranslation ? s.translationProvider : s.provider;
-    final apiKey =
-        useTranslation ? s.translationApiKey() : s.apiKeyForCurrentProvider();
-    final model = useTranslation ? s.translationModel : s.model;
-    if (apiKey.isEmpty) {
+    final req = s.buildChatRequest();
+    if (req == null) {
       if (!mounted) return;
       setState(() {
         t.state = TurnState.llmError;
-        t.lastError = StateError(useTranslation
-            ? 'Set the ${providerOf(providerKind).name} API key in Settings.'
-            : 'Set the API key in Settings first.');
+        t.lastError = StateError('Pick a Chat provider in Settings.');
+      });
+      return;
+    }
+    if (req.apiKey.isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        t.state = TurnState.llmError;
+        t.lastError =
+            StateError('Set the ${req.providerName} API key in Settings.');
+      });
+      return;
+    }
+    if (t.audioPath == null) return;
+    t.cancelled = false;
+    final http.Client netClient = http.Client();
+    t.stopper = netClient;
+    if (!mounted) return;
+    setState(() {
+      t.state = TurnState.sending;
+      t.lastError = null;
+    });
+    try {
+      final bytes = await File(t.audioPath!).readAsBytes();
+      final sysPrompt = s.composedSystemPrompt();
+      final msgs = <ChatMessage>[
+        if (sysPrompt.isNotEmpty) ChatMessage('system', sysPrompt),
+        ChatMessage(
+          'user',
+          '',
+          audio: ChatAudio(bytes: bytes, format: t.audioFormat),
+        ),
+      ];
+      final chat = ChatClient(
+        dialect: req.dialect,
+        baseUrl: req.baseUrl,
+        apiKey: req.apiKey,
+        model: req.modelId,
+        client: netClient,
+        timeout: Duration(seconds: s.llmTimeoutSeconds),
+      );
+      final reply = await chat.send(msgs);
+      final path = t.audioPath!;
+      unawaited(File(path).delete().catchError((_) => File(path)));
+      if (!mounted) return;
+
+      String? transcript;
+      String output = reply;
+      if (s.audioDirectIncludeTranscript) {
+        final parsed = _parseFusedJson(reply);
+        if (parsed != null) {
+          transcript = parsed.$1;
+          output = parsed.$2;
+        } else {
+          debugPrint('[FusedChat] turn ${t.id} JSON parse failed: $reply');
+        }
+      }
+
+      setState(() {
+        t.audioPath = null;
+        t.userText = transcript;
+        t.assistantText = output;
+        t.state = TurnState.done;
+        t.lastError = null;
+      });
+      _scrollToBottom();
+      if (s.ttsAutoSpeak && s.ttsProviderId != null) {
+        _queueSpeak(output, turnId: t.id);
+      }
+    } catch (e) {
+      debugPrint('[FusedChat] turn ${t.id} failed: $e');
+      if (!mounted) return;
+      if (t.cancelled) return;
+      setState(() {
+        t.state = TurnState.llmError;
+        t.lastError = e;
+      });
+    } finally {
+      t.stopper = null;
+      netClient.close();
+      _maybeResumeHalfDuplex();
+    }
+  }
+
+  Future<void> _runLlm(ChatTurn t) async {
+    final s = widget.settings;
+    final req = s.buildChatRequest();
+    if (req == null) {
+      if (!mounted) return;
+      setState(() {
+        t.state = TurnState.llmError;
+        t.lastError = StateError('Pick a Chat provider in Settings.');
+      });
+      return;
+    }
+    if (req.apiKey.isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        t.state = TurnState.llmError;
+        t.lastError =
+            StateError('Set the ${req.providerName} API key in Settings.');
       });
       return;
     }
@@ -478,9 +633,10 @@ class _ChatScreenState extends State<ChatScreen>
         ChatMessage('user', userText),
       ];
       final chat = ChatClient(
-        provider: providerOf(providerKind),
-        apiKey: apiKey,
-        model: model,
+        dialect: req.dialect,
+        baseUrl: req.baseUrl,
+        apiKey: req.apiKey,
+        model: req.modelId,
         client: netClient,
         timeout: Duration(seconds: s.llmTimeoutSeconds),
       );
@@ -492,7 +648,7 @@ class _ChatScreenState extends State<ChatScreen>
         t.lastError = null;
       });
       _scrollToBottom();
-      if (s.ttsAutoSpeak && s.ttsMode != TtsMode.off) {
+      if (s.ttsAutoSpeak && s.ttsProviderId != null) {
         _queueSpeak(reply, turnId: t.id);
       }
     } catch (e) {
@@ -542,6 +698,10 @@ class _ChatScreenState extends State<ChatScreen>
   }
 
   Future<void> _retryTurn(ChatTurn t) async {
+    if (t.fusedAudio && t.audioPath != null) {
+      await _runFusedChat(t);
+      return;
+    }
     if (t.state == TurnState.sttError) {
       final ok = await _runStt(t);
       if (ok) _scheduleLlm(t);
@@ -597,21 +757,15 @@ class _ChatScreenState extends State<ChatScreen>
 
   Future<void> _speakText(String text, {int? turnId}) async {
     final s = widget.settings;
+    final req = s.buildTtsRequest();
+    if (req == null) return;
     if (turnId != null) {
       setState(() => _speakingTurnId = turnId);
     }
     try {
       await _tts.speak(
         text: text,
-        mode: s.ttsMode,
-        openAiApiKey: s.openAiKey,
-        openAiModel: s.ttsOpenAiModel,
-        openAiVoice: s.ttsOpenAiVoice,
-        volcAppKey: s.volcAppKey,
-        volcAccessKey: s.volcAccessKey,
-        volcResourceId: s.ttsVolcResourceId,
-        volcSpeaker: s.ttsVolcSpeaker,
-        volcSpeechRate: s.ttsVolcSpeechRate,
+        request: req,
         timeout: Duration(seconds: s.ttsTimeoutSeconds),
       );
     } catch (e) {
@@ -750,7 +904,6 @@ class _ChatScreenState extends State<ChatScreen>
 
   Future<void> _openConfigSheet() async {
     final s = widget.settings;
-    final ctrl = TextEditingController(text: s.model);
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -765,93 +918,113 @@ class _ChatScreenState extends State<ChatScreen>
           ),
           child: StatefulBuilder(
             builder: (ctx, setM) {
-              final provider = providerOf(s.provider);
               final langsEqual = s.translationLangA == s.translationLangB;
               return SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('LLM',
-                        style: TextStyle(fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 8),
-                    SegmentedButton<ProviderKind>(
-                      segments: kProviders
-                          .map((p) => ButtonSegment(
-                              value: p.kind, label: Text(p.name)))
-                          .toList(),
-                      selected: {s.provider},
-                      onSelectionChanged: (v) {
-                        s.setProvider(v.first);
-                        final suggested =
-                            providerOf(v.first).suggestedModels.first;
-                        s.setModel(suggested);
-                        ctrl.text = suggested;
-                        setM(() {});
-                      },
-                    ),
-                    const SizedBox(height: 8),
-                    TextField(
-                      controller: ctrl,
-                      decoration: const InputDecoration(
-                        hintText: 'Model id',
-                        border: OutlineInputBorder(),
-                        isDense: true,
-                      ),
-                      onChanged: s.setModel,
-                    ),
-                    const SizedBox(height: 8),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 4,
-                      children: [
-                        for (final m in provider.suggestedModels)
-                          ActionChip(
-                            label: Text(m),
-                            onPressed: () {
-                              ctrl.text = m;
-                              s.setModel(m);
+                    _sheetSection(
+                      'Chat',
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _ProviderModelPicker(
+                            cap: Capability.chat,
+                            providerId: s.chatProviderId,
+                            modelId: s.chatModelId,
+                            allowOff: false,
+                            onProvider: (id) async {
+                              await s.setChatProvider(id!);
+                              setM(() {});
+                            },
+                            onModel: (id) async {
+                              await s.setChatModel(id);
                               setM(() {});
                             },
                           ),
-                      ],
+                          SwitchListTile(
+                            contentPadding: EdgeInsets.zero,
+                            dense: true,
+                            title: const Text('Include scene prompt'),
+                            value: s.includeScenePrompt,
+                            onChanged: (v) async {
+                              await s.setIncludeScenePrompt(v);
+                              setM(() {});
+                            },
+                          ),
+                          SwitchListTile(
+                            contentPadding: EdgeInsets.zero,
+                            dense: true,
+                            title: const Text('Audio direct (skip STT)'),
+                            subtitle: s.chatModelAcceptsAudio
+                                ? null
+                                : const Text(
+                                    'Current chat model has no audio input.',
+                                    style: TextStyle(fontSize: 11),
+                                  ),
+                            value:
+                                s.audioDirectChat && s.chatModelAcceptsAudio,
+                            onChanged: s.chatModelAcceptsAudio
+                                ? (v) async {
+                                    await s.setAudioDirectChat(v);
+                                    setM(() {});
+                                  }
+                                : null,
+                          ),
+                          if (s.audioDirectActive)
+                            Padding(
+                              padding: const EdgeInsets.only(left: 16),
+                              child: SwitchListTile(
+                                contentPadding: EdgeInsets.zero,
+                                dense: true,
+                                title: const Text(
+                                    'Return original transcript (JSON)'),
+                                value: s.audioDirectIncludeTranscript,
+                                onChanged: (v) async {
+                                  await s.setAudioDirectIncludeTranscript(v);
+                                  setM(() {});
+                                },
+                              ),
+                            ),
+                        ],
+                      ),
                     ),
                     const Divider(height: 28),
-                    const Text('Speech-to-Text',
-                        style: TextStyle(fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 8),
-                    SegmentedButton<SttProvider>(
-                      segments: const [
-                        ButtonSegment(
-                            value: SttProvider.off, label: Text('Off')),
-                        ButtonSegment(
-                            value: SttProvider.openai, label: Text('OpenAI')),
-                        ButtonSegment(
-                            value: SttProvider.volcFlash, label: Text('豆包')),
-                      ],
-                      selected: {s.sttProvider},
-                      onSelectionChanged: (v) {
-                        s.setSttProvider(v.first);
-                        setM(() {});
-                      },
+                    _sheetSection(
+                      'Speech-to-Text',
+                      _ProviderModelPicker(
+                        cap: Capability.stt,
+                        providerId: s.sttProviderId,
+                        modelId: s.sttModelId,
+                        allowOff: true,
+                        onProvider: (id) async {
+                          await s.setSttProvider(id);
+                          setM(() {});
+                        },
+                        onModel: (id) async {
+                          await s.setSttModel(id);
+                          setM(() {});
+                        },
+                      ),
                     ),
                     const Divider(height: 28),
-                    const Text('Text-to-Speech',
-                        style: TextStyle(fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 8),
-                    SegmentedButton<TtsMode>(
-                      segments: const [
-                        ButtonSegment(value: TtsMode.off, label: Text('Off')),
-                        ButtonSegment(
-                            value: TtsMode.openai, label: Text('OpenAI')),
-                        ButtonSegment(
-                            value: TtsMode.volcDoubao, label: Text('豆包')),
-                      ],
-                      selected: {s.ttsMode},
-                      onSelectionChanged: (v) {
-                        s.setTtsMode(v.first);
-                        setM(() {});
-                      },
+                    _sheetSection(
+                      'Text-to-Speech',
+                      _ProviderModelPicker(
+                        cap: Capability.tts,
+                        providerId: s.ttsProviderId,
+                        modelId: s.ttsModelId,
+                        allowOff: true,
+                        onProvider: (id) async {
+                          await s.setTtsProvider(id);
+                          setM(() {});
+                        },
+                        onModel: (id) async {
+                          await s.setTtsModel(id);
+                          setM(() {});
+                        },
+                      ),
                     ),
                     const Divider(height: 28),
                     Row(
@@ -937,11 +1110,23 @@ class _ChatScreenState extends State<ChatScreen>
     );
   }
 
+  Widget _sheetSection(String title, Widget child) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
+        const SizedBox(height: 8),
+        child,
+      ],
+    );
+  }
+
   // ---------- Messages ----------
 
   List<Widget> _turnWidgets(ChatTurn t) {
     final widgets = <Widget>[_userBubble(t)];
-    final showAssistant = t.userText != null && t.userText!.isNotEmpty &&
+    final hasUserText = t.userText != null && t.userText!.isNotEmpty;
+    final showAssistant = (hasUserText || t.fusedAudio) &&
         t.state != TurnState.sttError;
     if (showAssistant) widgets.add(_assistantBubble(t));
     return widgets;
@@ -951,9 +1136,11 @@ class _ChatScreenState extends State<ChatScreen>
     final cs = Theme.of(context).colorScheme;
     final text = t.userText;
     final isError = t.state == TurnState.sttError;
-    final isPending = t.state == TurnState.transcribing;
+    final isPending = t.state == TurnState.transcribing ||
+        (t.fusedAudio && t.state == TurnState.sending);
     Widget content;
     if (isPending) {
+      final label = t.fusedAudio ? 'Sending audio…' : 'Transcribing…';
       content = Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -966,8 +1153,7 @@ class _ChatScreenState extends State<ChatScreen>
             ),
           ),
           const SizedBox(width: 8),
-          Text('Transcribing…',
-              style: TextStyle(color: cs.onPrimary, height: 1.35)),
+          Text(label, style: TextStyle(color: cs.onPrimary, height: 1.35)),
           const SizedBox(width: 6),
           InkWell(
             onTap: () => _cancelTurn(t),
@@ -1007,6 +1193,16 @@ class _ChatScreenState extends State<ChatScreen>
                   size: 18, color: cs.onErrorContainer),
             ),
           ),
+        ],
+      );
+    } else if (t.fusedAudio && (text == null || text.isEmpty)) {
+      content = Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.mic, size: 16, color: cs.onPrimary),
+          const SizedBox(width: 6),
+          Text('Audio',
+              style: TextStyle(color: cs.onPrimary, height: 1.35)),
         ],
       );
     } else {
@@ -1053,7 +1249,7 @@ class _ChatScreenState extends State<ChatScreen>
 
   Widget _assistantBubble(ChatTurn t) {
     final cs = Theme.of(context).colorScheme;
-    final ttsEnabled = widget.settings.ttsMode != TtsMode.off;
+    final ttsEnabled = widget.settings.ttsProviderId != null;
     final isSpeakingThis = _speakingTurnId == t.id;
     final isError = t.state == TurnState.llmError;
     final isPending = t.state == TurnState.waitingLlm ||
@@ -1214,7 +1410,7 @@ class _ChatScreenState extends State<ChatScreen>
   Widget _bottomBar() {
     final s = widget.settings;
     final cs = Theme.of(context).colorScheme;
-    if (s.sttProvider == SttProvider.off) return _textInputBar();
+    if (!s.voiceInputAvailable) return _textInputBar();
     final isContinuous = s.voiceMode == VoiceMode.continuous;
     final isHalfDuplex = isContinuous && !s.continuousFullDuplex;
     final status = _statusLabel(s.voiceMode);
@@ -1728,6 +1924,81 @@ class _LevelMeter extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+/// Two-step provider → model picker used in the config sheet. Filters
+/// providers by [cap] and renders an "Off" option iff [allowOff].
+class _ProviderModelPicker extends StatelessWidget {
+  final Capability cap;
+  final String? providerId;
+  final String modelId;
+  final bool allowOff;
+  final ValueChanged<String?> onProvider;
+  final ValueChanged<String> onModel;
+
+  const _ProviderModelPicker({
+    required this.cap,
+    required this.providerId,
+    required this.modelId,
+    required this.allowOff,
+    required this.onProvider,
+    required this.onModel,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final providers = providersFor(cap).toList();
+    final selected = findProvider(providerId);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        DropdownButtonFormField<String?>(
+          initialValue: providerId,
+          isExpanded: true,
+          decoration: const InputDecoration(
+            labelText: 'Provider',
+            border: OutlineInputBorder(),
+            isDense: true,
+          ),
+          items: [
+            if (allowOff)
+              const DropdownMenuItem<String?>(value: null, child: Text('Off')),
+            for (final p in providers)
+              DropdownMenuItem<String?>(value: p.id, child: Text(p.name)),
+          ],
+          onChanged: onProvider,
+        ),
+        if (selected != null) ...[
+          const SizedBox(height: 8),
+          Builder(builder: (_) {
+            final models = selected.modelsFor(cap).toList();
+            final value = models.any((m) => m.id == modelId)
+                ? modelId
+                : (models.isEmpty ? null : models.first.id);
+            return DropdownButtonFormField<String>(
+              initialValue: value,
+              isExpanded: true,
+              decoration: const InputDecoration(
+                labelText: 'Model',
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+              items: models
+                  .map((m) => DropdownMenuItem(
+                        value: m.id,
+                        child:
+                            Text(m.label, overflow: TextOverflow.ellipsis),
+                      ))
+                  .toList(),
+              onChanged: (v) {
+                if (v != null) onModel(v);
+              },
+            );
+          }),
+        ],
+      ],
     );
   }
 }

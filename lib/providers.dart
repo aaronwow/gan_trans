@@ -1,73 +1,54 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 
-enum ProviderKind { openai, gemini }
+import 'catalog.dart';
 
-class AiProvider {
-  final ProviderKind kind;
-  final String name;
-  final String baseUrl;
-  final List<String> suggestedModels;
+/// Optional audio attachment on a [ChatMessage] (user role only). The runtime
+/// re-encodes this into the dialect-specific request shape (Gemini's
+/// `inline_data` part, OpenAI's `input_audio` content block).
+class ChatAudio {
+  final List<int> bytes;
+  final String format; // 'wav' | 'mp3' | 'aac' | etc.
+  const ChatAudio({required this.bytes, required this.format});
 
-  const AiProvider({
-    required this.kind,
-    required this.name,
-    required this.baseUrl,
-    required this.suggestedModels,
-  });
+  String get mimeType {
+    switch (format.toLowerCase()) {
+      case 'mp3':
+        return 'audio/mp3';
+      case 'aac':
+        return 'audio/aac';
+      case 'ogg':
+        return 'audio/ogg';
+      case 'flac':
+        return 'audio/flac';
+      case 'aiff':
+        return 'audio/aiff';
+      case 'wav':
+      default:
+        return 'audio/wav';
+    }
+  }
 }
-
-const kProviders = <AiProvider>[
-  AiProvider(
-    kind: ProviderKind.openai,
-    name: 'OpenAI',
-    baseUrl: 'https://api.openai.com/v1',
-    suggestedModels: [
-      'gpt-4o',
-      'gpt-4o-mini',
-      'gpt-4-turbo',
-      'gpt-3.5-turbo',
-      'o1',
-      'o1-mini',
-    ],
-  ),
-  AiProvider(
-    kind: ProviderKind.gemini,
-    name: 'Gemini (Google)',
-    baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
-    suggestedModels: [
-      'gemini-3-flash-preview',
-      'gemini-flash-latest',
-      'gemini-2.5-pro',
-      'gemini-2.5-flash',
-      'gemini-2.0-flash',
-      'gemini-2.0-flash-lite',
-      'gemini-1.5-pro',
-      'gemini-1.5-flash',
-    ],
-  ),
-];
-
-AiProvider providerOf(ProviderKind k) =>
-    kProviders.firstWhere((p) => p.kind == k);
 
 class ChatMessage {
   final String role;
   final String content;
-  ChatMessage(this.role, this.content);
-
-  Map<String, dynamic> toOpenAiJson() => {'role': role, 'content': content};
+  final ChatAudio? audio; // attached audio; only meaningful on 'user' messages
+  ChatMessage(this.role, this.content, {this.audio});
 }
 
+/// Dispatches a chat request to the wire format described by [dialect].
 class ChatClient {
-  final AiProvider provider;
+  final ApiDialect dialect;
+  final String baseUrl;
   final String apiKey;
   final String model;
   final http.Client? client;
   final Duration timeout;
 
   ChatClient({
-    required this.provider,
+    required this.dialect,
+    required this.baseUrl,
     required this.apiKey,
     required this.model,
     this.client,
@@ -78,11 +59,13 @@ class ChatClient {
     final c = client ?? http.Client();
     final owned = client == null;
     try {
-      switch (provider.kind) {
-        case ProviderKind.openai:
+      switch (dialect) {
+        case ApiDialect.openaiChat:
           return await _sendOpenAi(history, c);
-        case ProviderKind.gemini:
+        case ApiDialect.geminiChat:
           return await _sendGemini(history, c);
+        default:
+          throw StateError('ChatClient: unsupported dialect $dialect');
       }
     } finally {
       if (owned) c.close();
@@ -90,36 +73,73 @@ class ChatClient {
   }
 
   Future<String> _sendOpenAi(List<ChatMessage> history, http.Client c) async {
-    final payload = {
-      'model': model,
-      'messages': history.map((m) => m.toOpenAiJson()).toList(),
-    };
-    final body = jsonEncode(payload);
-    final resp = await c.post(
-      Uri.parse('${provider.baseUrl}/chat/completions'),
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer $apiKey',
-      },
-      body: body,
-    ).timeout(timeout);
+    final messages = history.map((m) {
+      if (m.audio == null) {
+        return {'role': m.role, 'content': m.content};
+      }
+      // Multipart user message: text + input_audio.
+      return {
+        'role': m.role,
+        'content': [
+          if (m.content.isNotEmpty) {'type': 'text', 'text': m.content},
+          {
+            'type': 'input_audio',
+            'input_audio': {
+              'data': base64Encode(m.audio!.bytes),
+              'format': m.audio!.format,
+            },
+          },
+        ],
+      };
+    }).toList();
+    final payload = {'model': model, 'messages': messages};
+    final resp = await c
+        .post(
+          Uri.parse('$baseUrl/chat/completions'),
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer $apiKey',
+          },
+          body: jsonEncode(payload),
+        )
+        .timeout(timeout);
     if (resp.statusCode >= 400) {
-      throw Exception('OpenAI ${resp.statusCode}: ${resp.body}');
+      throw Exception('Chat ${resp.statusCode}: ${resp.body}');
     }
     final data = jsonDecode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
-    return data['choices'][0]['message']['content'] as String;
+    final msg = data['choices'][0]['message'] as Map<String, dynamic>;
+    // gpt-4o-audio-preview returns a string in 'content', or in some configs
+    // an 'audio' object; we only consume text here.
+    final c1 = msg['content'];
+    if (c1 is String) return c1;
+    if (c1 is List) {
+      final parts = c1.whereType<Map>().map((e) => e['text'] ?? '').join();
+      if (parts.isNotEmpty) return parts;
+    }
+    final audioField = msg['audio'];
+    if (audioField is Map && audioField['transcript'] is String) {
+      return audioField['transcript'] as String;
+    }
+    throw Exception('Chat: empty response: ${resp.body}');
   }
 
   Future<String> _sendGemini(List<ChatMessage> history, http.Client c) async {
-    final contents = history
-        .where((m) => m.role != 'system')
-        .map((m) => {
-              'role': m.role == 'assistant' ? 'model' : 'user',
-              'parts': [
-                {'text': m.content}
-              ],
-            })
-        .toList();
+    final contents = history.where((m) => m.role != 'system').map((m) {
+      final parts = <Map<String, dynamic>>[];
+      if (m.content.isNotEmpty) parts.add({'text': m.content});
+      if (m.audio != null) {
+        parts.add({
+          'inline_data': {
+            'mime_type': m.audio!.mimeType,
+            'data': base64Encode(m.audio!.bytes),
+          },
+        });
+      }
+      return {
+        'role': m.role == 'assistant' ? 'model' : 'user',
+        'parts': parts,
+      };
+    }).toList();
     final systemMsg = history.where((m) => m.role == 'system').toList();
     final body = <String, dynamic>{'contents': contents};
     if (systemMsg.isNotEmpty) {
@@ -129,12 +149,13 @@ class ChatClient {
         ]
       };
     }
-    final encoded = jsonEncode(body);
-    final resp = await c.post(
-      Uri.parse('${provider.baseUrl}/models/$model:generateContent?key=$apiKey'),
-      headers: {'Content-Type': 'application/json'},
-      body: encoded,
-    ).timeout(timeout);
+    final resp = await c
+        .post(
+          Uri.parse('$baseUrl/models/$model:generateContent?key=$apiKey'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode(body),
+        )
+        .timeout(timeout);
     if (resp.statusCode >= 400) {
       throw Exception('Gemini ${resp.statusCode}: ${resp.body}');
     }

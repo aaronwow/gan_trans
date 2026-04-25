@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
-import 'providers.dart';
+
+import 'catalog.dart';
 import 'settings.dart';
-import 'stt_service.dart';
-import 'tts_service.dart';
 
 class SettingsScreen extends StatefulWidget {
   final AppSettings settings;
@@ -13,27 +12,22 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  late final TextEditingController _openAi;
-  late final TextEditingController _gemini;
-  late final TextEditingController _volcAppKey;
-  late final TextEditingController _volcAccessKey;
+  /// Per (providerId, fieldName) text controllers, lazily created.
+  final Map<String, TextEditingController> _credCtrls = {};
 
-  @override
-  void initState() {
-    super.initState();
-    _openAi = TextEditingController(text: widget.settings.openAiKey);
-    _gemini = TextEditingController(text: widget.settings.geminiKey);
-    _volcAppKey = TextEditingController(text: widget.settings.volcAppKey);
-    _volcAccessKey =
-        TextEditingController(text: widget.settings.volcAccessKey);
+  TextEditingController _credCtrl(String providerId, CredentialField f) {
+    final key = '${providerId}__${f.name}';
+    return _credCtrls.putIfAbsent(
+      key,
+      () => TextEditingController(text: widget.settings.credential(providerId, f)),
+    );
   }
 
   @override
   void dispose() {
-    _openAi.dispose();
-    _gemini.dispose();
-    _volcAppKey.dispose();
-    _volcAccessKey.dispose();
+    for (final c in _credCtrls.values) {
+      c.dispose();
+    }
     super.dispose();
   }
 
@@ -45,288 +39,123 @@ class _SettingsScreenState extends State<SettingsScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          const Text('API Keys', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _openAi,
-            obscureText: true,
-            decoration: const InputDecoration(
-              labelText: 'OpenAI API Key',
-              border: OutlineInputBorder(),
-            ),
-            onChanged: s.setOpenAiKey,
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _gemini,
-            obscureText: true,
-            decoration: const InputDecoration(
-              labelText: 'Gemini API Key',
-              border: OutlineInputBorder(),
-            ),
-            onChanged: s.setGeminiKey,
-          ),
-          const SizedBox(height: 24),
-          const Text('Correction + Translation Model',
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-          const SizedBox(height: 8),
+          _sectionTitle('Providers'),
+          const SizedBox(height: 4),
           Text(
-            'Used when the "修正+翻译" toggle is on in the chat top bar.',
+            'Each provider lists the credentials it requires. The same key is reused across Chat, STT, and TTS.',
             style: TextStyle(
               color: Theme.of(context).colorScheme.onSurfaceVariant,
               fontSize: 12,
             ),
           ),
+          const SizedBox(height: 12),
+          for (final p in kCatalog) _providerCard(p),
+
+          const SizedBox(height: 16),
+          _sectionTitle('Chat'),
           const SizedBox(height: 8),
-          DropdownButtonFormField<ProviderKind>(
-            initialValue: s.translationProvider,
-            decoration: const InputDecoration(
-              labelText: 'Provider',
-              border: OutlineInputBorder(),
+          _capabilityPicker(
+            cap: Capability.chat,
+            providerId: s.chatProviderId,
+            modelId: s.chatModelId,
+            onProvider: (id) => s.setChatProvider(id!),
+            onModel: (id) => s.setChatModel(id),
+            allowOff: false,
+          ),
+          const SizedBox(height: 8),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Include scene prompt'),
+            subtitle: const Text(
+              'Inject the active scene\'s prompt into the chat system prompt. '
+              'Has no effect on STT or TTS.',
             ),
-            items: kProviders
-                .map((p) => DropdownMenuItem(value: p.kind, child: Text(p.name)))
-                .toList(),
+            value: s.includeScenePrompt,
             onChanged: (v) {
-              s.setTranslationProvider(v!);
+              s.setIncludeScenePrompt(v);
               setState(() {});
             },
           ),
-          const SizedBox(height: 12),
-          Builder(builder: (context) {
-            final models = providerOf(s.translationProvider).suggestedModels;
-            final value = models.contains(s.translationModel)
-                ? s.translationModel
-                : models.first;
-            return DropdownButtonFormField<String>(
-              initialValue: value,
-              isExpanded: true,
-              decoration: const InputDecoration(
-                labelText: 'Model',
-                border: OutlineInputBorder(),
-              ),
-              items: models
-                  .map((m) => DropdownMenuItem(value: m, child: Text(m)))
-                  .toList(),
-              onChanged: (v) {
-                if (v == null) return;
-                s.setTranslationModel(v);
-                setState(() {});
-              },
-            );
-          }),
-          const SizedBox(height: 24),
-          const Text('Text-to-Speech', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-          const SizedBox(height: 8),
-          DropdownButtonFormField<TtsMode>(
-            initialValue: s.ttsMode,
-            decoration: const InputDecoration(
-              labelText: 'TTS Mode',
-              border: OutlineInputBorder(),
-            ),
-            items: const [
-              DropdownMenuItem(value: TtsMode.off, child: Text('Off')),
-              DropdownMenuItem(
-                  value: TtsMode.openai, child: Text('OpenAI (gpt-4o-mini-tts)')),
-              DropdownMenuItem(
-                  value: TtsMode.volcDoubao,
-                  child: Text('Volcengine 豆包 (seed-tts-2.0)')),
-            ],
-            onChanged: (v) { s.setTtsMode(v!); setState(() {}); },
-          ),
-          const SizedBox(height: 12),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
-            title: const Text('Auto-speak assistant replies'),
-            value: s.ttsAutoSpeak,
-            onChanged: s.ttsMode == TtsMode.off
-                ? null
-                : (v) { s.setTtsAutoSpeak(v); setState(() {}); },
+            title: const Text('Audio direct (skip STT)'),
+            subtitle: Text(
+              s.chatModelAcceptsAudio
+                  ? 'Send the recording straight to the chat model. Replaces STT for this turn.'
+                  : 'The current chat model does not accept audio input. Pick a model that does (e.g. Gemini, gpt-4o-audio-preview).',
+              style: s.chatModelAcceptsAudio
+                  ? null
+                  : TextStyle(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant),
+            ),
+            value: s.audioDirectChat && s.chatModelAcceptsAudio,
+            onChanged: s.chatModelAcceptsAudio
+                ? (v) {
+                    s.setAudioDirectChat(v);
+                    setState(() {});
+                  }
+                : null,
           ),
-          if (s.ttsMode == TtsMode.openai) ...[
-            const SizedBox(height: 8),
-            DropdownButtonFormField<String>(
-              initialValue: kOpenAiTtsModels.contains(s.ttsOpenAiModel)
-                  ? s.ttsOpenAiModel
-                  : kOpenAiTtsModels.first,
-              decoration: const InputDecoration(
-                labelText: 'OpenAI TTS Model',
-                border: OutlineInputBorder(),
-              ),
-              items: kOpenAiTtsModels
-                  .map((m) => DropdownMenuItem(value: m, child: Text(m)))
-                  .toList(),
-              onChanged: (v) { s.setTtsOpenAiModel(v!); setState(() {}); },
-            ),
-            const SizedBox(height: 12),
-            DropdownButtonFormField<String>(
-              initialValue: kOpenAiTtsVoices.contains(s.ttsOpenAiVoice)
-                  ? s.ttsOpenAiVoice
-                  : kOpenAiTtsVoices.first,
-              decoration: const InputDecoration(
-                labelText: 'OpenAI TTS Voice',
-                border: OutlineInputBorder(),
-              ),
-              items: kOpenAiTtsVoices
-                  .map((v) => DropdownMenuItem(value: v, child: Text(v)))
-                  .toList(),
-              onChanged: (v) { s.setTtsOpenAiVoice(v!); setState(() {}); },
-            ),
-          ],
-          if (s.ttsMode == TtsMode.volcDoubao) ...[
-            const SizedBox(height: 8),
-            DropdownButtonFormField<String>(
-              initialValue: kDoubaoVoices.any((e) => e.value == s.ttsVolcSpeaker)
-                  ? s.ttsVolcSpeaker
-                  : kDoubaoVoices.first.value,
-              isExpanded: true,
-              decoration: const InputDecoration(
-                labelText: 'Doubao Voice',
-                border: OutlineInputBorder(),
-              ),
-              items: kDoubaoVoices
-                  .map((v) => DropdownMenuItem(
-                        value: v.value,
-                        child: Text('${v.label} — ${v.lang}',
-                            overflow: TextOverflow.ellipsis),
-                      ))
-                  .toList(),
-              onChanged: (v) {
-                s.setTtsVolcSpeaker(v!);
-                setState(() {});
-              },
-            ),
-            const SizedBox(height: 12),
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              title: Text(
-                'Speech rate: ${s.ttsVolcSpeechRate > 0 ? '+' : ''}${s.ttsVolcSpeechRate} '
-                '(${(1 + s.ttsVolcSpeechRate / 100).toStringAsFixed(2)}x)',
-              ),
-              subtitle: Slider(
-                value: s.ttsVolcSpeechRate.toDouble(),
-                min: -50,
-                max: 100,
-                divisions: 30,
-                label: '${s.ttsVolcSpeechRate}',
+          if (s.audioDirectActive)
+            Padding(
+              padding: const EdgeInsets.only(left: 16),
+              child: SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Return original transcript (JSON)'),
+                subtitle: const Text(
+                  'Ask the model to return JSON with both the raw transcript '
+                  'and the corrected/translated output. Transcript shows in '
+                  'the user bubble.',
+                ),
+                value: s.audioDirectIncludeTranscript,
                 onChanged: (v) {
-                  s.setTtsVolcSpeechRate(v.round());
+                  s.setAudioDirectIncludeTranscript(v);
                   setState(() {});
                 },
               ),
             ),
+
+          const SizedBox(height: 16),
+          _sectionTitle('Speech-to-Text'),
+          const SizedBox(height: 8),
+          _capabilityPicker(
+            cap: Capability.stt,
+            providerId: s.sttProviderId,
+            modelId: s.sttModelId,
+            onProvider: (id) => s.setSttProvider(id),
+            onModel: (id) => s.setSttModel(id),
+            allowOff: true,
+          ),
+
+          const SizedBox(height: 16),
+          _sectionTitle('Text-to-Speech'),
+          const SizedBox(height: 8),
+          _capabilityPicker(
+            cap: Capability.tts,
+            providerId: s.ttsProviderId,
+            modelId: s.ttsModelId,
+            onProvider: (id) => s.setTtsProvider(id),
+            onModel: (id) => s.setTtsModel(id),
+            allowOff: true,
+          ),
+          if (s.ttsProviderId != null) ...[
+            const SizedBox(height: 12),
+            _ttsVoicePicker(),
             const SizedBox(height: 8),
-            Text(
-              'Uses the Volcengine AppKey/AccessKey configured in the STT section.',
-              style: TextStyle(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-                fontSize: 12,
-              ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Auto-speak assistant replies'),
+              value: s.ttsAutoSpeak,
+              onChanged: (v) {
+                s.setTtsAutoSpeak(v);
+                setState(() {});
+              },
             ),
+            if (s.ttsProviderId == 'volcengine') _doubaoSpeechRate(),
           ],
+
           const SizedBox(height: 24),
-          const Text('OpenAI STT model',
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-          const SizedBox(height: 8),
-          DropdownButtonFormField<String>(
-            initialValue: kOpenAiSttModels.contains(s.sttOpenAiModel)
-                ? s.sttOpenAiModel
-                : kOpenAiSttModels.first,
-            decoration: const InputDecoration(
-              labelText: 'Model',
-              border: OutlineInputBorder(),
-            ),
-            items: kOpenAiSttModels
-                .map((m) => DropdownMenuItem(value: m, child: Text(m)))
-                .toList(),
-            onChanged: (v) { s.setSttOpenAiModel(v!); setState(() {}); },
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Used when STT is set to OpenAI. API key comes from the OpenAI key above.',
-            style: TextStyle(
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-              fontSize: 12,
-            ),
-          ),
-          const SizedBox(height: 24),
-          const Text('Volcengine 豆包 (STT + TTS)',
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-          const SizedBox(height: 4),
-          Text(
-            'Credentials are shared between 豆包 STT and 豆包 TTS.',
-            style: TextStyle(
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-              fontSize: 12,
-            ),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            obscureText: true,
-            controller: _volcAppKey,
-            decoration: const InputDecoration(
-              labelText: 'AppKey (X-Api-App-Key)',
-              border: OutlineInputBorder(),
-            ),
-            onChanged: s.setVolcAppKey,
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            obscureText: true,
-            controller: _volcAccessKey,
-            decoration: const InputDecoration(
-              labelText: 'AccessKey (X-Api-Access-Key)',
-              border: OutlineInputBorder(),
-            ),
-            onChanged: s.setVolcAccessKey,
-          ),
-          const SizedBox(height: 12),
-          DropdownButtonFormField<String>(
-            initialValue: kVolcSttResourceIds.any((o) => o.value == s.volcResourceId)
-                ? s.volcResourceId
-                : kVolcSttResourceIds.first.value,
-            isExpanded: true,
-            decoration: const InputDecoration(
-              labelText: 'STT Resource ID',
-              border: OutlineInputBorder(),
-            ),
-            items: kVolcSttResourceIds
-                .map((o) => DropdownMenuItem(
-                      value: o.value,
-                      child: Text(o.label, overflow: TextOverflow.ellipsis),
-                    ))
-                .toList(),
-            onChanged: (v) {
-              if (v == null) return;
-              s.setVolcResourceId(v);
-              setState(() {});
-            },
-          ),
-          const SizedBox(height: 12),
-          DropdownButtonFormField<String>(
-            initialValue: kDoubaoTtsResourceIds.any((o) => o.value == s.ttsVolcResourceId)
-                ? s.ttsVolcResourceId
-                : kDoubaoTtsResourceIds.first.value,
-            isExpanded: true,
-            decoration: const InputDecoration(
-              labelText: 'TTS Resource ID',
-              border: OutlineInputBorder(),
-            ),
-            items: kDoubaoTtsResourceIds
-                .map((o) => DropdownMenuItem(
-                      value: o.value,
-                      child: Text(o.label, overflow: TextOverflow.ellipsis),
-                    ))
-                .toList(),
-            onChanged: (v) {
-              if (v == null) return;
-              s.setTtsVolcResourceId(v);
-              setState(() {});
-            },
-          ),
-          const SizedBox(height: 24),
-          const Text('Microphone',
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          _sectionTitle('Microphone'),
           const SizedBox(height: 8),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
@@ -341,9 +170,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
               setState(() {});
             },
           ),
-          const SizedBox(height: 24),
-          const Text('Voice Activity Detection (VAD)',
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+
+          const SizedBox(height: 16),
+          _sectionTitle('Voice Activity Detection (VAD)'),
           const SizedBox(height: 8),
           ListTile(
             contentPadding: EdgeInsets.zero,
@@ -370,13 +199,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
               max: 300,
               divisions: 29,
               label: '${s.vadListenSeconds}s',
-              onChanged: (v) { s.setVadListen(v.round()); setState(() {}); },
+              onChanged: (v) {
+                s.setVadListen(v.round());
+                setState(() {});
+              },
             ),
             trailing: Text('${s.vadListenSeconds}s'),
           ),
+
           const SizedBox(height: 16),
-          const Text('Timeouts',
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          _sectionTitle('Timeouts'),
           ListTile(
             contentPadding: EdgeInsets.zero,
             title: const Text('STT timeout'),
@@ -425,6 +257,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             trailing: Text('${s.ttsTimeoutSeconds}s'),
           ),
+
           const SizedBox(height: 16),
           ListTile(
             contentPadding: EdgeInsets.zero,
@@ -463,6 +296,173 @@ class _SettingsScreenState extends State<SettingsScreen> {
             trailing: Text('${s.minRecordSeconds.toStringAsFixed(1)}s'),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _sectionTitle(String t) =>
+      Text(t, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16));
+
+  Widget _providerCard(ProviderSpec p) {
+    final s = widget.settings;
+    final caps = <String>[
+      if (p.hasCapability(Capability.chat)) 'Chat',
+      if (p.hasCapability(Capability.stt)) 'STT',
+      if (p.hasCapability(Capability.tts)) 'TTS',
+    ].join(' · ');
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Text(p.name, style: const TextStyle(fontWeight: FontWeight.w600)),
+                const SizedBox(width: 8),
+                Text(caps,
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      fontSize: 12,
+                    )),
+              ],
+            ),
+            const SizedBox(height: 8),
+            for (final f in p.credentials) ...[
+              TextField(
+                controller: _credCtrl(p.id, f),
+                obscureText: true,
+                decoration: InputDecoration(
+                  labelText: f.label,
+                  border: const OutlineInputBorder(),
+                  isDense: true,
+                ),
+                onChanged: (v) => s.setCredential(p.id, f, v),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _capabilityPicker({
+    required Capability cap,
+    required String? providerId,
+    required String modelId,
+    required ValueChanged<String?> onProvider,
+    required ValueChanged<String> onModel,
+    required bool allowOff,
+  }) {
+    final providers = providersFor(cap).toList();
+    final selectedProvider = findProvider(providerId);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        DropdownButtonFormField<String?>(
+          initialValue: providerId,
+          isExpanded: true,
+          decoration: const InputDecoration(
+            labelText: 'Provider',
+            border: OutlineInputBorder(),
+            isDense: true,
+          ),
+          items: [
+            if (allowOff)
+              const DropdownMenuItem<String?>(value: null, child: Text('Off')),
+            for (final p in providers)
+              DropdownMenuItem<String?>(value: p.id, child: Text(p.name)),
+          ],
+          onChanged: (v) {
+            onProvider(v);
+            setState(() {});
+          },
+        ),
+        if (selectedProvider != null) ...[
+          const SizedBox(height: 8),
+          Builder(builder: (_) {
+            final models = selectedProvider.modelsFor(cap).toList();
+            final value = models.any((m) => m.id == modelId)
+                ? modelId
+                : (models.isEmpty ? null : models.first.id);
+            return DropdownButtonFormField<String>(
+              initialValue: value,
+              isExpanded: true,
+              decoration: const InputDecoration(
+                labelText: 'Model',
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+              items: models
+                  .map((m) => DropdownMenuItem(
+                        value: m.id,
+                        child: Text(m.label, overflow: TextOverflow.ellipsis),
+                      ))
+                  .toList(),
+              onChanged: (v) {
+                if (v == null) return;
+                onModel(v);
+                setState(() {});
+              },
+            );
+          }),
+        ],
+      ],
+    );
+  }
+
+  Widget _ttsVoicePicker() {
+    final s = widget.settings;
+    final provider = findProvider(s.ttsProviderId);
+    final model = provider?.findModel(s.ttsModelId);
+    final voices = model?.voices ?? const <TtsVoice>[];
+    if (voices.isEmpty) return const SizedBox.shrink();
+    final value = voices.any((v) => v.id == s.ttsVoice) ? s.ttsVoice : voices.first.id;
+    return DropdownButtonFormField<String>(
+      initialValue: value,
+      isExpanded: true,
+      decoration: const InputDecoration(
+        labelText: 'Voice',
+        border: OutlineInputBorder(),
+        isDense: true,
+      ),
+      items: voices
+          .map((v) => DropdownMenuItem(
+                value: v.id,
+                child: Text(
+                  v.lang == null ? v.label : '${v.label} — ${v.lang}',
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ))
+          .toList(),
+      onChanged: (v) {
+        if (v == null) return;
+        s.setTtsVoice(v);
+        setState(() {});
+      },
+    );
+  }
+
+  Widget _doubaoSpeechRate() {
+    final s = widget.settings;
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      title: Text(
+        'Speech rate: ${s.ttsVolcSpeechRate > 0 ? '+' : ''}${s.ttsVolcSpeechRate} '
+        '(${(1 + s.ttsVolcSpeechRate / 100).toStringAsFixed(2)}x)',
+      ),
+      subtitle: Slider(
+        value: s.ttsVolcSpeechRate.toDouble(),
+        min: -50,
+        max: 100,
+        divisions: 30,
+        label: '${s.ttsVolcSpeechRate}',
+        onChanged: (v) {
+          s.setTtsVolcSpeechRate(v.round());
+          setState(() {});
+        },
       ),
     );
   }

@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'providers.dart';
+
+import 'catalog.dart';
 import 'scenes.dart';
 import 'stt_service.dart';
 import 'tts_service.dart';
@@ -29,33 +30,30 @@ const kTranslationLanguages = <String>[
   '越南语',
 ];
 
-
 class AppSettings extends ChangeNotifier {
-  static const _kOpenAiKey = 'openai_api_key';
-  static const _kGeminiKey = 'gemini_api_key';
-  static const _kProvider = 'selected_provider';
-  static const _kModel = 'selected_model';
-  static const _kVoiceMode = 'voice_mode';
-  static const _kTtsMode = 'tts_mode';
+  // ---- New unified keys ----
+  // Per-provider credentials: cred__<providerId>__<fieldName>
+  static String _credKey(String providerId, CredentialField f) =>
+      'cred__${providerId}__${f.name}';
+
+  static const _kChatProvider = 'chat_provider_id';
+  static const _kChatModel = 'chat_model_id';
+  static const _kSttProviderId = 'stt_provider_id'; // empty / null = off
+  static const _kSttModelId = 'stt_model_id';
+  static const _kTtsProviderId = 'tts_provider_id'; // empty / null = off
+  static const _kTtsModelId = 'tts_model_id';
+  static const _kTtsVoice = 'tts_voice';
   static const _kTtsAutoSpeak = 'tts_auto_speak';
-  static const _kTtsOpenAiModel = 'tts_openai_model';
-  static const _kTtsOpenAiVoice = 'tts_openai_voice';
-  static const _kTtsVolcSpeaker = 'tts_volc_speaker';
   static const _kTtsVolcSpeechRate = 'tts_volc_speech_rate';
-  static const _kTtsVolcResourceId = 'tts_volc_resource_id';
+
+  // Other (unchanged)
+  static const _kVoiceMode = 'voice_mode';
   static const _kScenes = 'scenes_v1';
   static const _kActiveScene = 'active_scene';
   static const _kCorrectionEnabled = 'correction_enabled';
   static const _kTranslationEnabled = 'translation_enabled';
   static const _kTranslationLangA = 'translation_lang_a';
   static const _kTranslationLangB = 'translation_lang_b';
-  static const _kTranslationProvider = 'translation_provider';
-  static const _kTranslationModel = 'translation_model';
-  static const _kSttProvider = 'stt_provider';
-  static const _kSttOpenAiModel = 'stt_openai_model';
-  static const _kVolcAppKey = 'volc_app_key';
-  static const _kVolcAccessKey = 'volc_access_key';
-  static const _kVolcResourceId = 'volc_resource_id';
   static const _kVadPause = 'vad_pause_seconds';
   static const _kVadListen = 'vad_listen_seconds';
   static const _kVadThreshold = 'vad_threshold_level';
@@ -66,33 +64,56 @@ class AppSettings extends ChangeNotifier {
   static const _kHistoryContextCount = 'history_context_count';
   static const _kAecEnabled = 'aec_enabled';
   static const _kContinuousFullDuplex = 'continuous_full_duplex';
+  static const _kAudioDirectChat = 'audio_direct_chat';
+  static const _kAudioDirectIncludeTranscript =
+      'audio_direct_include_transcript';
+  static const _kIncludeScenePrompt = 'include_scene_prompt';
 
-  String openAiKey = '';
-  String geminiKey = '';
-  ProviderKind provider = ProviderKind.openai;
-  String model = 'gpt-4o-mini';
-  VoiceMode voiceMode = VoiceMode.pushToTalk;
-  TtsMode ttsMode = TtsMode.off;
+  // Legacy keys (read-only, used for one-time migration on first load).
+  static const _legacyOpenAiKey = 'openai_api_key';
+  static const _legacyGeminiKey = 'gemini_api_key';
+  static const _legacyVolcAppKey = 'volc_app_key';
+  static const _legacyVolcAccessKey = 'volc_access_key';
+  static const _legacyVolcResourceId = 'volc_resource_id';
+  static const _legacyProvider = 'selected_provider';
+  static const _legacyModel = 'selected_model';
+  static const _legacyTtsMode = 'tts_mode';
+  static const _legacyTtsOpenAiModel = 'tts_openai_model';
+  static const _legacyTtsOpenAiVoice = 'tts_openai_voice';
+  static const _legacyTtsVolcSpeaker = 'tts_volc_speaker';
+  static const _legacyTtsVolcResourceId = 'tts_volc_resource_id';
+  static const _legacySttProvider = 'stt_provider';
+  static const _legacySttOpenAiModel = 'stt_openai_model';
+
+  // ---- Per-provider credentials ----
+  /// providerId → (CredentialField → value)
+  final Map<String, Map<CredentialField, String>> _credentials = {};
+
+  Map<CredentialField, String> credentialsFor(String providerId) =>
+      _credentials[providerId] ?? const {};
+
+  String credential(String providerId, CredentialField f) =>
+      _credentials[providerId]?[f] ?? '';
+
+  // ---- Selected provider/model per capability ----
+  String? chatProviderId;
+  String chatModelId = '';
+  String? sttProviderId; // null = off
+  String sttModelId = '';
+  String? ttsProviderId; // null = off
+  String ttsModelId = '';
+  String ttsVoice = '';
   bool ttsAutoSpeak = true;
-  String ttsOpenAiModel = 'gpt-4o-mini-tts';
-  String ttsOpenAiVoice = 'alloy';
-  String ttsVolcSpeaker = 'zh_female_vv_uranus_bigtts';
   int ttsVolcSpeechRate = 0;
-  String ttsVolcResourceId = kDoubaoTtsResourceId;
 
+  // ---- Other settings ----
+  VoiceMode voiceMode = VoiceMode.pushToTalk;
   List<Scene> scenes = [];
   String activeSceneId = kDefaultSceneId;
   bool correctionEnabled = false;
   bool translationEnabled = false;
   String translationLangA = '中文';
   String translationLangB = '印尼语';
-  ProviderKind translationProvider = ProviderKind.gemini;
-  String translationModel = 'gemini-3-flash-preview';
-  SttProvider sttProvider = SttProvider.openai;
-  String sttOpenAiModel = 'gpt-4o-mini-transcribe';
-  String volcAppKey = '';
-  String volcAccessKey = '';
-  String volcResourceId = kVolcFlashResourceId;
   double vadPauseSeconds = 2.0;
   int vadListenSeconds = 60;
   double vadThresholdLevel = 2.0;
@@ -103,32 +124,91 @@ class AppSettings extends ChangeNotifier {
   int historyContextCount = 3;
   bool aecEnabled = true;
   /// Inside continuous mode: when true the mic stays open during TTS playback
-  /// (full-duplex). Default is false → half-duplex (mic mutes while the
-  /// pipeline processes or plays the previous reply). User-toggleable.
+  /// (full-duplex). Default is false → half-duplex.
   bool continuousFullDuplex = false;
+  /// When true and the selected chat model accepts audio input, skip STT and
+  /// send the recording straight to the chat model. The chat model returns
+  /// the corrected/translated text in one round-trip.
+  bool audioDirectChat = false;
+  /// In audio-direct mode: ask the model to return JSON with both the original
+  /// audio transcript and the corrected/translated output. The transcript
+  /// renders in the user bubble (like a normal STT result); the output goes
+  /// to the assistant bubble. Off → assistant bubble carries the output and
+  /// the user bubble shows a generic mic placeholder.
+  bool audioDirectIncludeTranscript = false;
+  /// When true (default), the active scene's prompt is injected into the chat
+  /// system prompt. Affects both text-mode and audio-direct chat. STT and TTS
+  /// are unaffected (scene prompt has no place there).
+  bool includeScenePrompt = true;
 
-  Scene get activeScene =>
-      scenes.firstWhere((s) => s.id == activeSceneId, orElse: () => scenes.first);
+  Scene get activeScene => scenes.firstWhere(
+        (s) => s.id == activeSceneId,
+        orElse: () => scenes.first,
+      );
+
+  Future<SharedPreferences> get _prefs => SharedPreferences.getInstance();
 
   Future<void> load() async {
     final p = await SharedPreferences.getInstance();
-    openAiKey = p.getString(_kOpenAiKey) ?? '';
-    geminiKey = p.getString(_kGeminiKey) ?? '';
-    provider = ProviderKind.values[p.getInt(_kProvider) ?? 0];
-    model = p.getString(_kModel) ?? 'gpt-4o-mini';
-    voiceMode = VoiceMode.values[p.getInt(_kVoiceMode) ?? 0];
-    final ttsIdx = p.getInt(_kTtsMode) ?? 0;
-    ttsMode = ttsIdx >= 0 && ttsIdx < TtsMode.values.length
-        ? TtsMode.values[ttsIdx]
-        : TtsMode.off;
+
+    // Load credentials for every catalog provider, falling back to legacy keys.
+    for (final provider in kCatalog) {
+      final m = <CredentialField, String>{};
+      for (final f in provider.credentials) {
+        final newVal = p.getString(_credKey(provider.id, f));
+        m[f] = newVal ?? _legacyCredential(p, provider.id, f);
+      }
+      _credentials[provider.id] = m;
+    }
+
+    // Chat provider/model — fall back to legacy enum (0=openai, 1=gemini).
+    chatProviderId = p.getString(_kChatProvider) ??
+        _legacyChatProviderId(p) ??
+        'google';
+    chatModelId = p.getString(_kChatModel) ??
+        p.getString(_legacyModel) ??
+        _firstModelId(chatProviderId!, Capability.chat) ??
+        '';
+    _ensureValid(Capability.chat);
+
+    // STT provider/model — legacy enum 0=openai, 1=volcFlash, 2=off.
+    if (p.containsKey(_kSttProviderId)) {
+      final v = p.getString(_kSttProviderId);
+      sttProviderId = (v == null || v.isEmpty) ? null : v;
+    } else {
+      sttProviderId = _legacySttProviderId(p);
+    }
+    if (sttProviderId != null) {
+      sttModelId = p.getString(_kSttModelId) ??
+          _legacySttModelId(p, sttProviderId!) ??
+          _firstModelId(sttProviderId!, Capability.stt) ??
+          '';
+    }
+    _ensureValid(Capability.stt);
+
+    // TTS provider/model — legacy enum 0=off, 1=openai, 2=volcDoubao.
+    if (p.containsKey(_kTtsProviderId)) {
+      final v = p.getString(_kTtsProviderId);
+      ttsProviderId = (v == null || v.isEmpty) ? null : v;
+    } else {
+      ttsProviderId = _legacyTtsProviderId(p);
+    }
+    if (ttsProviderId != null) {
+      ttsModelId = p.getString(_kTtsModelId) ??
+          _legacyTtsModelId(p, ttsProviderId!) ??
+          _firstModelId(ttsProviderId!, Capability.tts) ??
+          '';
+      ttsVoice = p.getString(_kTtsVoice) ??
+          _legacyTtsVoiceValue(p, ttsProviderId!) ??
+          _firstVoice(ttsProviderId!, ttsModelId) ??
+          '';
+    }
+    _ensureValid(Capability.tts);
+
     ttsAutoSpeak = p.getBool(_kTtsAutoSpeak) ?? true;
-    ttsOpenAiModel = p.getString(_kTtsOpenAiModel) ?? 'gpt-4o-mini-tts';
-    ttsOpenAiVoice = p.getString(_kTtsOpenAiVoice) ?? 'alloy';
-    ttsVolcSpeaker =
-        p.getString(_kTtsVolcSpeaker) ?? 'zh_female_vv_uranus_bigtts';
     ttsVolcSpeechRate = p.getInt(_kTtsVolcSpeechRate) ?? 0;
-    ttsVolcResourceId =
-        p.getString(_kTtsVolcResourceId) ?? kDoubaoTtsResourceId;
+
+    voiceMode = VoiceMode.values[p.getInt(_kVoiceMode) ?? 0];
 
     final rawScenes = p.getString(_kScenes);
     scenes = rawScenes != null ? decodeScenes(rawScenes) : defaultScenes();
@@ -137,23 +217,12 @@ class AppSettings extends ChangeNotifier {
     if (!scenes.any((s) => s.id == activeSceneId)) {
       activeSceneId = scenes.first.id;
     }
+
     correctionEnabled = p.getBool(_kCorrectionEnabled) ?? false;
     translationEnabled = p.getBool(_kTranslationEnabled) ?? false;
     translationLangA = p.getString(_kTranslationLangA) ?? '中文';
     translationLangB = p.getString(_kTranslationLangB) ?? '印尼语';
-    final tpIdx = p.getInt(_kTranslationProvider) ?? ProviderKind.gemini.index;
-    translationProvider = tpIdx >= 0 && tpIdx < ProviderKind.values.length
-        ? ProviderKind.values[tpIdx]
-        : ProviderKind.gemini;
-    translationModel =
-        p.getString(_kTranslationModel) ?? 'gemini-3-flash-preview';
-    sttProvider = SttProvider.values[p.getInt(_kSttProvider) ?? 0];
-    sttOpenAiModel =
-        p.getString(_kSttOpenAiModel) ?? 'gpt-4o-mini-transcribe';
-    volcAppKey = p.getString(_kVolcAppKey) ?? '';
-    volcAccessKey = p.getString(_kVolcAccessKey) ?? '';
-    volcResourceId = p.getString(_kVolcResourceId) ?? kVolcFlashResourceId;
-    // Migrate from legacy int key.
+
     final vp = p.get(_kVadPause);
     vadPauseSeconds = vp is double ? vp : (vp is int ? vp.toDouble() : 2.0);
     vadListenSeconds = p.getInt(_kVadListen) ?? 60;
@@ -165,6 +234,275 @@ class AppSettings extends ChangeNotifier {
     historyContextCount = p.getInt(_kHistoryContextCount) ?? 3;
     aecEnabled = p.getBool(_kAecEnabled) ?? true;
     continuousFullDuplex = p.getBool(_kContinuousFullDuplex) ?? false;
+    audioDirectChat = p.getBool(_kAudioDirectChat) ?? false;
+    audioDirectIncludeTranscript =
+        p.getBool(_kAudioDirectIncludeTranscript) ?? false;
+    includeScenePrompt = p.getBool(_kIncludeScenePrompt) ?? true;
+
+    notifyListeners();
+  }
+
+  // ---- Legacy migration helpers ----
+
+  String _legacyCredential(
+      SharedPreferences p, String providerId, CredentialField f) {
+    switch (providerId) {
+      case 'openai':
+        if (f == CredentialField.apiKey) {
+          return p.getString(_legacyOpenAiKey) ?? '';
+        }
+        break;
+      case 'google':
+        if (f == CredentialField.apiKey) {
+          return p.getString(_legacyGeminiKey) ?? '';
+        }
+        break;
+      case 'volcengine':
+        if (f == CredentialField.appKey) {
+          return p.getString(_legacyVolcAppKey) ?? '';
+        }
+        if (f == CredentialField.accessKey) {
+          return p.getString(_legacyVolcAccessKey) ?? '';
+        }
+        break;
+    }
+    return '';
+  }
+
+  String? _legacyChatProviderId(SharedPreferences p) {
+    final idx = p.getInt(_legacyProvider);
+    if (idx == null) return null;
+    return idx == 1 ? 'google' : 'openai';
+  }
+
+  String? _legacySttProviderId(SharedPreferences p) {
+    final idx = p.getInt(_legacySttProvider);
+    if (idx == null) return 'openai';
+    switch (idx) {
+      case 0:
+        return 'openai';
+      case 1:
+        return 'volcengine';
+      case 2:
+        return null; // off
+    }
+    return 'openai';
+  }
+
+  String? _legacySttModelId(SharedPreferences p, String providerId) {
+    if (providerId == 'openai') return p.getString(_legacySttOpenAiModel);
+    if (providerId == 'volcengine') return p.getString(_legacyVolcResourceId);
+    return null;
+  }
+
+  String? _legacyTtsProviderId(SharedPreferences p) {
+    final idx = p.getInt(_legacyTtsMode);
+    if (idx == null) return null;
+    switch (idx) {
+      case 0:
+        return null; // off
+      case 1:
+        return 'openai';
+      case 2:
+        return 'volcengine';
+    }
+    return null;
+  }
+
+  String? _legacyTtsModelId(SharedPreferences p, String providerId) {
+    if (providerId == 'openai') return p.getString(_legacyTtsOpenAiModel);
+    if (providerId == 'volcengine') {
+      return p.getString(_legacyTtsVolcResourceId);
+    }
+    return null;
+  }
+
+  String? _legacyTtsVoiceValue(SharedPreferences p, String providerId) {
+    if (providerId == 'openai') return p.getString(_legacyTtsOpenAiVoice);
+    if (providerId == 'volcengine') return p.getString(_legacyTtsVolcSpeaker);
+    return null;
+  }
+
+  String? _firstModelId(String providerId, Capability c) {
+    final p = findProvider(providerId);
+    if (p == null) return null;
+    final m = p.modelsFor(c);
+    return m.isEmpty ? null : m.first.id;
+  }
+
+  String? _firstVoice(String providerId, String modelId) {
+    final p = findProvider(providerId);
+    final m = p?.findModel(modelId);
+    if (m == null || m.voices.isEmpty) return null;
+    return m.voices.first.id;
+  }
+
+  /// Snap a selection back to a valid model in the catalog. If the persisted
+  /// model id is no longer in the catalog (e.g. removed in an update), pick
+  /// the first available one.
+  void _ensureValid(Capability c) {
+    String? pid;
+    String mid = '';
+    switch (c) {
+      case Capability.chat:
+        pid = chatProviderId;
+        mid = chatModelId;
+        break;
+      case Capability.stt:
+        pid = sttProviderId;
+        mid = sttModelId;
+        break;
+      case Capability.tts:
+        pid = ttsProviderId;
+        mid = ttsModelId;
+        break;
+    }
+    if (pid == null) return;
+    final provider = findProvider(pid);
+    if (provider == null || !provider.hasCapability(c)) {
+      // Provider missing or no longer offers this capability.
+      switch (c) {
+        case Capability.chat:
+          chatProviderId = providersFor(c).isEmpty
+              ? null
+              : providersFor(c).first.id;
+          chatModelId = chatProviderId == null
+              ? ''
+              : (_firstModelId(chatProviderId!, c) ?? '');
+          break;
+        case Capability.stt:
+          sttProviderId = null;
+          sttModelId = '';
+          break;
+        case Capability.tts:
+          ttsProviderId = null;
+          ttsModelId = '';
+          ttsVoice = '';
+          break;
+      }
+      return;
+    }
+    final m = provider.findModel(mid);
+    if (m == null || !m.supports(c)) {
+      final fallback = _firstModelId(pid, c) ?? '';
+      switch (c) {
+        case Capability.chat:
+          chatModelId = fallback;
+          break;
+        case Capability.stt:
+          sttModelId = fallback;
+          break;
+        case Capability.tts:
+          ttsModelId = fallback;
+          ttsVoice = _firstVoice(pid, fallback) ?? '';
+          break;
+      }
+      return;
+    }
+    if (c == Capability.tts && m.voices.isNotEmpty) {
+      if (!m.voices.any((v) => v.id == ttsVoice)) {
+        ttsVoice = m.voices.first.id;
+      }
+    }
+  }
+
+  // ---- Setters ----
+
+  Future<void> setCredential(
+      String providerId, CredentialField field, String value) async {
+    _credentials.putIfAbsent(providerId, () => {})[field] = value;
+    await (await _prefs).setString(_credKey(providerId, field), value);
+    notifyListeners();
+  }
+
+  Future<void> setChatProvider(String providerId) async {
+    chatProviderId = providerId;
+    final mid = _firstModelId(providerId, Capability.chat) ?? '';
+    chatModelId = mid;
+    final p = await _prefs;
+    await p.setString(_kChatProvider, providerId);
+    await p.setString(_kChatModel, mid);
+    notifyListeners();
+  }
+
+  Future<void> setChatModel(String modelId) async {
+    chatModelId = modelId;
+    await (await _prefs).setString(_kChatModel, modelId);
+    notifyListeners();
+  }
+
+  Future<void> setSttProvider(String? providerId) async {
+    sttProviderId = providerId;
+    final p = await _prefs;
+    await p.setString(_kSttProviderId, providerId ?? '');
+    if (providerId != null) {
+      sttModelId = _firstModelId(providerId, Capability.stt) ?? '';
+      await p.setString(_kSttModelId, sttModelId);
+    } else {
+      sttModelId = '';
+    }
+    notifyListeners();
+  }
+
+  Future<void> setSttModel(String modelId) async {
+    sttModelId = modelId;
+    await (await _prefs).setString(_kSttModelId, modelId);
+    notifyListeners();
+  }
+
+  Future<void> setTtsProvider(String? providerId) async {
+    ttsProviderId = providerId;
+    final p = await _prefs;
+    await p.setString(_kTtsProviderId, providerId ?? '');
+    if (providerId != null) {
+      ttsModelId = _firstModelId(providerId, Capability.tts) ?? '';
+      ttsVoice = _firstVoice(providerId, ttsModelId) ?? '';
+      await p.setString(_kTtsModelId, ttsModelId);
+      await p.setString(_kTtsVoice, ttsVoice);
+    } else {
+      ttsModelId = '';
+      ttsVoice = '';
+    }
+    notifyListeners();
+  }
+
+  Future<void> setTtsModel(String modelId) async {
+    ttsModelId = modelId;
+    final p = await _prefs;
+    await p.setString(_kTtsModelId, modelId);
+    // Reset voice to first voice of new model if the current one isn't valid.
+    if (ttsProviderId != null) {
+      final m = findProvider(ttsProviderId!)?.findModel(modelId);
+      if (m != null && m.voices.isNotEmpty &&
+          !m.voices.any((v) => v.id == ttsVoice)) {
+        ttsVoice = m.voices.first.id;
+        await p.setString(_kTtsVoice, ttsVoice);
+      }
+    }
+    notifyListeners();
+  }
+
+  Future<void> setTtsVoice(String voice) async {
+    ttsVoice = voice;
+    await (await _prefs).setString(_kTtsVoice, voice);
+    notifyListeners();
+  }
+
+  Future<void> setTtsAutoSpeak(bool v) async {
+    ttsAutoSpeak = v;
+    await (await _prefs).setBool(_kTtsAutoSpeak, v);
+    notifyListeners();
+  }
+
+  Future<void> setTtsVolcSpeechRate(int v) async {
+    ttsVolcSpeechRate = v;
+    await (await _prefs).setInt(_kTtsVolcSpeechRate, v);
+    notifyListeners();
+  }
+
+  Future<void> setVoiceMode(VoiceMode v) async {
+    voiceMode = v;
+    await (await _prefs).setInt(_kVoiceMode, v.index);
     notifyListeners();
   }
 
@@ -180,87 +518,48 @@ class AppSettings extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> setAudioDirectChat(bool v) async {
+    audioDirectChat = v;
+    await (await _prefs).setBool(_kAudioDirectChat, v);
+    notifyListeners();
+  }
+
+  Future<void> setAudioDirectIncludeTranscript(bool v) async {
+    audioDirectIncludeTranscript = v;
+    await (await _prefs).setBool(_kAudioDirectIncludeTranscript, v);
+    notifyListeners();
+  }
+
+  Future<void> setIncludeScenePrompt(bool v) async {
+    includeScenePrompt = v;
+    await (await _prefs).setBool(_kIncludeScenePrompt, v);
+    notifyListeners();
+  }
+
+  /// True iff the currently-selected chat model accepts audio input.
+  bool get chatModelAcceptsAudio {
+    final pid = chatProviderId;
+    if (pid == null) return false;
+    final m = findProvider(pid)?.findModel(chatModelId);
+    return m?.acceptsAudio() ?? false;
+  }
+
+  /// True iff audio-direct mode is both enabled and supported by the current
+  /// chat model. Use this — not [audioDirectChat] alone — to gate runtime
+  /// behaviour, so the toggle going stale (e.g. user switched to a non-audio
+  /// model) doesn't break the pipeline.
+  bool get audioDirectActive => audioDirectChat && chatModelAcceptsAudio;
+
+  /// True iff voice input has somewhere to go: a configured STT provider, or
+  /// the audio-direct path. When false, the mic is hidden in favour of the
+  /// text input bar.
+  bool get voiceInputAvailable =>
+      sttProviderId != null || audioDirectActive;
+
   Future<void> setMinRecordSeconds(double v) async {
     final clamped = v < 0.1 ? 0.1 : v;
     minRecordSeconds = clamped;
     await (await _prefs).setDouble(_kMinRecordSeconds, clamped);
-    notifyListeners();
-  }
-
-  Future<SharedPreferences> get _prefs => SharedPreferences.getInstance();
-
-  Future<void> setOpenAiKey(String v) async {
-    openAiKey = v;
-    await (await _prefs).setString(_kOpenAiKey, v);
-    notifyListeners();
-  }
-
-  Future<void> setGeminiKey(String v) async {
-    geminiKey = v;
-    await (await _prefs).setString(_kGeminiKey, v);
-    notifyListeners();
-  }
-
-  Future<void> setProvider(ProviderKind v) async {
-    provider = v;
-    await (await _prefs).setInt(_kProvider, v.index);
-    notifyListeners();
-  }
-
-  Future<void> setModel(String v) async {
-    model = v;
-    await (await _prefs).setString(_kModel, v);
-    notifyListeners();
-  }
-
-  Future<void> setVoiceMode(VoiceMode v) async {
-    voiceMode = v;
-    await (await _prefs).setInt(_kVoiceMode, v.index);
-    notifyListeners();
-  }
-
-  String apiKeyForCurrentProvider() =>
-      provider == ProviderKind.openai ? openAiKey : geminiKey;
-
-  Future<void> setTtsMode(TtsMode v) async {
-    ttsMode = v;
-    await (await _prefs).setInt(_kTtsMode, v.index);
-    notifyListeners();
-  }
-
-  Future<void> setTtsAutoSpeak(bool v) async {
-    ttsAutoSpeak = v;
-    await (await _prefs).setBool(_kTtsAutoSpeak, v);
-    notifyListeners();
-  }
-
-  Future<void> setTtsOpenAiModel(String v) async {
-    ttsOpenAiModel = v;
-    await (await _prefs).setString(_kTtsOpenAiModel, v);
-    notifyListeners();
-  }
-
-  Future<void> setTtsOpenAiVoice(String v) async {
-    ttsOpenAiVoice = v;
-    await (await _prefs).setString(_kTtsOpenAiVoice, v);
-    notifyListeners();
-  }
-
-  Future<void> setTtsVolcSpeaker(String v) async {
-    ttsVolcSpeaker = v;
-    await (await _prefs).setString(_kTtsVolcSpeaker, v);
-    notifyListeners();
-  }
-
-  Future<void> setTtsVolcSpeechRate(int v) async {
-    ttsVolcSpeechRate = v;
-    await (await _prefs).setInt(_kTtsVolcSpeechRate, v);
-    notifyListeners();
-  }
-
-  Future<void> setTtsVolcResourceId(String v) async {
-    ttsVolcResourceId = v;
-    await (await _prefs).setString(_kTtsVolcResourceId, v);
     notifyListeners();
   }
 
@@ -318,60 +617,6 @@ class AppSettings extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> setTranslationProvider(ProviderKind v) async {
-    translationProvider = v;
-    await (await _prefs).setInt(_kTranslationProvider, v.index);
-    notifyListeners();
-  }
-
-  Future<void> setTranslationModel(String v) async {
-    translationModel = v;
-    await (await _prefs).setString(_kTranslationModel, v);
-    notifyListeners();
-  }
-
-  String translationApiKey() =>
-      translationProvider == ProviderKind.openai ? openAiKey : geminiKey;
-
-  Future<void> setSttProvider(SttProvider v) async {
-    sttProvider = v;
-    await (await _prefs).setInt(_kSttProvider, v.index);
-    notifyListeners();
-  }
-
-  Future<void> setSttOpenAiModel(String v) async {
-    sttOpenAiModel = v;
-    await (await _prefs).setString(_kSttOpenAiModel, v);
-    notifyListeners();
-  }
-
-  Future<void> setVolcAppKey(String v) async {
-    volcAppKey = v;
-    await (await _prefs).setString(_kVolcAppKey, v);
-    notifyListeners();
-  }
-
-  Future<void> setVolcAccessKey(String v) async {
-    volcAccessKey = v;
-    await (await _prefs).setString(_kVolcAccessKey, v);
-    notifyListeners();
-  }
-
-  Future<void> setVolcResourceId(String v) async {
-    volcResourceId = v;
-    await (await _prefs).setString(_kVolcResourceId, v);
-    notifyListeners();
-  }
-
-  SttConfig sttConfig() => SttConfig(
-        provider: sttProvider,
-        openAiKey: openAiKey,
-        openAiModel: sttOpenAiModel,
-        volcAppKey: volcAppKey,
-        volcAccessKey: volcAccessKey,
-        volcResourceId: volcResourceId,
-      );
-
   Future<void> setVadPause(double v) async {
     final clamped = v < 0.1 ? 0.1 : v;
     vadPauseSeconds = clamped;
@@ -416,18 +661,102 @@ class AppSettings extends ChangeNotifier {
     notifyListeners();
   }
 
+  // ---- Runtime requests built from current selection ----
+
+  /// Returns null if [chatProviderId] is missing, has no chat dialect, or has
+  /// no API key set.
+  ChatRequest? buildChatRequest({Duration? timeout}) {
+    final pid = chatProviderId;
+    if (pid == null) return null;
+    final provider = findProvider(pid);
+    if (provider == null) return null;
+    final dialect = provider.dialects[Capability.chat];
+    if (dialect == null) return null;
+    final apiKey = credential(pid, CredentialField.apiKey);
+    return ChatRequest(
+      providerName: provider.name,
+      dialect: dialect,
+      baseUrl: provider.baseUrl,
+      apiKey: apiKey,
+      modelId: chatModelId,
+    );
+  }
+
+  SttRequest? buildSttRequest() {
+    final pid = sttProviderId;
+    if (pid == null) return null;
+    final provider = findProvider(pid);
+    if (provider == null) return null;
+    final dialect = provider.dialects[Capability.stt];
+    if (dialect == null) return null;
+    return SttRequest(
+      dialect: dialect,
+      modelId: sttModelId,
+      creds: credentialsFor(pid),
+    );
+  }
+
+  TtsRequest? buildTtsRequest() {
+    final pid = ttsProviderId;
+    if (pid == null) return null;
+    final provider = findProvider(pid);
+    if (provider == null) return null;
+    final dialect = provider.dialects[Capability.tts];
+    if (dialect == null) return null;
+    return TtsRequest(
+      dialect: dialect,
+      modelId: ttsModelId,
+      voice: ttsVoice,
+      creds: credentialsFor(pid),
+      volcSpeechRate: ttsVolcSpeechRate,
+    );
+  }
+
   /// Mirrors auc-web/frontend/src/components/utils.ts:buildPipelineGeminiPrompt.
-  /// The user input is always STT output; the model corrects it with the
-  /// scene context and, when translation is enabled, translates between the
-  /// two configured languages.
+  /// In audio-direct mode the model receives audio directly, so the leading
+  /// "用户输入的文字是STT转换的结果" framing is dropped, timecodes are suppressed,
+  /// and an optional JSON output schema is added. Scene prompt is included
+  /// only when [includeScenePrompt] is true.
   String composedSystemPrompt() {
     final a = translationLangA.trim().isEmpty ? '中文' : translationLangA.trim();
     final b = translationLangB.trim().isEmpty ? '印尼语' : translationLangB.trim();
     final sceneText = activeScene.prompt.trim();
-    final scene = sceneText.isEmpty ? '' : '$sceneText。';
-    if (translationEnabled) {
-      return '用户输入的文字是STT转换的结果，$scene如果输入是$a，翻译成$b；如果输入是$b，翻译成$a。只输出修正翻译后的文字。';
+    final scene =
+        (includeScenePrompt && sceneText.isNotEmpty) ? '$sceneText。' : '';
+    final fused = audioDirectActive;
+    final lead = fused ? '' : '用户输入的文字是STT转换的结果，';
+    final task = translationEnabled
+        ? '如果输入是$a，翻译成$b；如果输入是$b，翻译成$a。'
+        : '修正输入文字。';
+
+    if (fused && audioDirectIncludeTranscript) {
+      // Strict JSON schema: transcript = ASR-style raw transcription, output =
+      // corrected/translated text. Timecodes/markdown explicitly forbidden so
+      // Gemini doesn't prepend "00:00" / append "00:04" timestamps.
+      return '$scene$task严格按以下 JSON 输出，不要使用 Markdown 代码块，不要包含任何时间戳或时间码（例如 00:00、00:04）：'
+          '{"transcript": "音频的原始转录文字", "output": "修正/翻译后的文字"}';
     }
-    return '用户输入的文字是STT转换的结果，$scene只输出修正后的文字。';
+    if (fused) {
+      return '$scene$task只输出修正后的文字，不要包含任何时间戳或时间码（例如 00:00、00:04），不要使用 Markdown 代码块。';
+    }
+    return '$lead$scene$task只输出修正后的文字。';
   }
+}
+
+/// Built by [AppSettings.buildChatRequest] — bundles everything the chat
+/// runtime needs without exposing settings internals.
+class ChatRequest {
+  final String providerName;
+  final ApiDialect dialect;
+  final String baseUrl;
+  final String apiKey;
+  final String modelId;
+
+  const ChatRequest({
+    required this.providerName,
+    required this.dialect,
+    required this.baseUrl,
+    required this.apiKey,
+    required this.modelId,
+  });
 }
