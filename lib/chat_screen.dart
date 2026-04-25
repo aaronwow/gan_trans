@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
+import 'main.dart';
 import 'providers.dart';
 import 'scenes_screen.dart';
 import 'settings.dart';
@@ -38,7 +39,8 @@ class ChatTurn {
       : state = TurnState.transcribing;
 }
 
-class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
+class _ChatScreenState extends State<ChatScreen>
+    with TickerProviderStateMixin, RouteAware {
   final _scroll = ScrollController();
   final _turns = <ChatTurn>[];
   final _recorder = AudioRecorder();
@@ -65,6 +67,10 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
   // Used by half-duplex idle detection so the mic doesn't reopen between
   // "LLM done" and "audio playback started".
   int _ttsPending = 0;
+  // Snapshot of _continuousLoopActive captured when another route covers us,
+  // so we can restore the loop on return without resurrecting it after the
+  // user explicitly stopped it.
+  bool _resumeLoopOnReturn = false;
 
   // Continuous / VAD state.
   bool _speakingNow = false;
@@ -94,6 +100,50 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       }
       if (!playing) _maybeResumeHalfDuplex();
     });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (route is PageRoute) {
+      routeObserver.subscribe(this, route);
+    }
+  }
+
+  // ---------- Route lifecycle ----------
+
+  // Pause the mic loop when another screen (e.g. Settings) covers us, so the
+  // recorder can't desync from the lit "continuous" button while we're hidden.
+  @override
+  void didPushNext() {
+    final s = widget.settings;
+    final isContinuous = s.voiceMode == VoiceMode.continuous;
+    _resumeLoopOnReturn =
+        isContinuous && (_continuousLoopActive || _listening);
+    _continuousLoopActive = false;
+    if (_listening) {
+      unawaited(_cutAndProcess());
+    }
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void didPopNext() {
+    if (!_resumeLoopOnReturn) return;
+    _resumeLoopOnReturn = false;
+    final s = widget.settings;
+    if (s.voiceMode != VoiceMode.continuous) return;
+    if (s.sttProvider == SttProvider.off) return;
+    _continuousLoopActive = true;
+    if (s.continuousFullDuplex) {
+      if (!_pipelineBusy() && !_listening) {
+        unawaited(_startListening());
+      }
+    } else {
+      _maybeResumeHalfDuplex();
+    }
+    if (mounted) setState(() {});
   }
 
   // ---------- Half-duplex idle/resume ----------
@@ -138,6 +188,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
 
   @override
   void dispose() {
+    routeObserver.unsubscribe(this);
     widget.settings.removeListener(_onSettingsChanged);
     _ampSub?.cancel();
     _playingSub?.cancel();
@@ -279,7 +330,10 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     });
     final recorded = path ?? _currentRecordingPath;
     _currentRecordingPath = null;
-    if (recorded == null) return;
+    if (recorded == null) {
+      _maybeResumeHalfDuplex();
+      return;
+    }
 
     final Duration elapsed;
     if (isContinuous) {
@@ -294,6 +348,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
     final minMs = (widget.settings.minRecordSeconds * 1000).round();
     if (elapsed.inMilliseconds < minMs) {
       unawaited(File(recorded).delete().catchError((_) => File(recorded)));
+      _maybeResumeHalfDuplex();
       return;
     }
 

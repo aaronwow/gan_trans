@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'settings.dart';
 import 'chat_screen.dart';
 
+final RouteObserver<ModalRoute<void>> routeObserver =
+    RouteObserver<ModalRoute<void>>();
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final settings = AppSettings();
@@ -21,6 +24,7 @@ class AiChatApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
         useMaterial3: true,
       ),
+      navigatorObservers: [routeObserver],
       home: ChatScreen(settings: settings),
     );
   }
