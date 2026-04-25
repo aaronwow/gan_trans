@@ -79,7 +79,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const SizedBox(height: 8),
           DropdownButtonFormField<ProviderKind>(
-            value: s.translationProvider,
+            initialValue: s.translationProvider,
             decoration: const InputDecoration(
               labelText: 'Provider',
               border: OutlineInputBorder(),
@@ -99,7 +99,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ? s.translationModel
                 : models.first;
             return DropdownButtonFormField<String>(
-              value: value,
+              initialValue: value,
               isExpanded: true,
               decoration: const InputDecoration(
                 labelText: 'Model',
@@ -119,7 +119,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const Text('Text-to-Speech', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
           const SizedBox(height: 8),
           DropdownButtonFormField<TtsMode>(
-            value: s.ttsMode,
+            initialValue: s.ttsMode,
             decoration: const InputDecoration(
               labelText: 'TTS Mode',
               border: OutlineInputBorder(),
@@ -146,7 +146,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           if (s.ttsMode == TtsMode.openai) ...[
             const SizedBox(height: 8),
             DropdownButtonFormField<String>(
-              value: kOpenAiTtsModels.contains(s.ttsOpenAiModel)
+              initialValue: kOpenAiTtsModels.contains(s.ttsOpenAiModel)
                   ? s.ttsOpenAiModel
                   : kOpenAiTtsModels.first,
               decoration: const InputDecoration(
@@ -160,7 +160,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             const SizedBox(height: 12),
             DropdownButtonFormField<String>(
-              value: kOpenAiTtsVoices.contains(s.ttsOpenAiVoice)
+              initialValue: kOpenAiTtsVoices.contains(s.ttsOpenAiVoice)
                   ? s.ttsOpenAiVoice
                   : kOpenAiTtsVoices.first,
               decoration: const InputDecoration(
@@ -176,7 +176,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           if (s.ttsMode == TtsMode.volcDoubao) ...[
             const SizedBox(height: 8),
             DropdownButtonFormField<String>(
-              value: kDoubaoVoices.any((e) => e.value == s.ttsVolcSpeaker)
+              initialValue: kDoubaoVoices.any((e) => e.value == s.ttsVolcSpeaker)
                   ? s.ttsVolcSpeaker
                   : kDoubaoVoices.first.value,
               isExpanded: true,
@@ -229,7 +229,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
           const SizedBox(height: 8),
           DropdownButtonFormField<String>(
-            value: kOpenAiSttModels.contains(s.sttOpenAiModel)
+            initialValue: kOpenAiSttModels.contains(s.sttOpenAiModel)
                 ? s.sttOpenAiModel
                 : kOpenAiSttModels.first,
             decoration: const InputDecoration(
@@ -282,7 +282,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const SizedBox(height: 12),
           DropdownButtonFormField<String>(
-            value: kVolcSttResourceIds.any((o) => o.value == s.volcResourceId)
+            initialValue: kVolcSttResourceIds.any((o) => o.value == s.volcResourceId)
                 ? s.volcResourceId
                 : kVolcSttResourceIds.first.value,
             isExpanded: true,
@@ -304,7 +304,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const SizedBox(height: 12),
           DropdownButtonFormField<String>(
-            value: kDoubaoTtsResourceIds.any((o) => o.value == s.ttsVolcResourceId)
+            initialValue: kDoubaoTtsResourceIds.any((o) => o.value == s.ttsVolcResourceId)
                 ? s.ttsVolcResourceId
                 : kDoubaoTtsResourceIds.first.value,
             isExpanded: true,

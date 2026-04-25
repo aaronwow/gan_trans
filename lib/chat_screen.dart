@@ -814,7 +814,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                     style: TextStyle(fontWeight: FontWeight.bold)),
                 const SizedBox(height: 12),
                 DropdownButtonFormField<String>(
-                  value: a,
+                  initialValue: a,
                   decoration: const InputDecoration(
                     labelText: 'Language A',
                     border: OutlineInputBorder(),
@@ -826,7 +826,7 @@ class _ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
                 ),
                 const SizedBox(height: 12),
                 DropdownButtonFormField<String>(
-                  value: b,
+                  initialValue: b,
                   decoration: const InputDecoration(
                     labelText: 'Language B',
                     border: OutlineInputBorder(),
@@ -1666,7 +1666,7 @@ class _MicBar extends StatelessWidget {
 
     Widget bar = AnimatedBuilder(
       animation: pulse,
-      builder: (_, __) {
+      builder: (_, _) {
         final glow = listening ? (0.25 + pulse.value * 0.25) : 0.18;
         return Container(
           height: 56,

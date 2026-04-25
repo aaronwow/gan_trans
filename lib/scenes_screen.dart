@@ -24,7 +24,7 @@ class _ScenesScreenState extends State<ScenesScreen> {
       body: ListView.separated(
         padding: const EdgeInsets.all(12),
         itemCount: s.scenes.length,
-        separatorBuilder: (_, __) => const SizedBox(height: 8),
+        separatorBuilder: (_, _) => const SizedBox(height: 8),
         itemBuilder: (_, i) {
           final scene = s.scenes[i];
           final active = scene.id == s.activeSceneId;
@@ -69,8 +69,9 @@ class _ScenesScreenState extends State<ScenesScreen> {
                 ],
               ),
               onTap: () async {
+                final navigator = Navigator.of(context);
                 await s.setActiveScene(scene.id);
-                if (mounted) Navigator.pop(context);
+                if (mounted) navigator.pop();
               },
             ),
           );
