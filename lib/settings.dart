@@ -42,8 +42,10 @@ class AppSettings extends ChangeNotifier {
   static const _kChatModel = 'chat_model_id';
   static const _kSttProviderId = 'stt_provider_id'; // empty / null = off
   static const _kSttModelId = 'stt_model_id';
+  static const _kLastSttProviderId = 'last_stt_provider_id';
   static const _kTtsProviderId = 'tts_provider_id'; // empty / null = off
   static const _kTtsModelId = 'tts_model_id';
+  static const _kLastTtsProviderId = 'last_tts_provider_id';
   static const _kTtsVoice = 'tts_voice';
   static const _kTtsAutoSpeak = 'tts_auto_speak';
   static const _kTtsVolcSpeechRate = 'tts_volc_speech_rate';
@@ -113,8 +115,10 @@ class AppSettings extends ChangeNotifier {
   String? chatProviderId;
   String chatModelId = '';
   String? sttProviderId; // null = off
+  String? _lastSttProviderId;
   String sttModelId = '';
   String? ttsProviderId; // null = off
+  String? _lastTtsProviderId;
   String ttsModelId = '';
   String ttsVoice = '';
   bool ttsAutoSpeak = true;
@@ -196,9 +200,14 @@ class AppSettings extends ChangeNotifier {
     } else {
       sttProviderId = _legacySttProviderId(p);
     }
+    final lastStt = p.getString(_kLastSttProviderId);
+    _lastSttProviderId = (lastStt == null || lastStt.isEmpty)
+        ? sttProviderId
+        : lastStt;
+    sttModelId = p.getString(_kSttModelId) ?? '';
     if (sttProviderId != null) {
       sttModelId =
-          p.getString(_kSttModelId) ??
+          (sttModelId.isEmpty ? null : sttModelId) ??
           _legacySttModelId(p, sttProviderId!) ??
           _firstModelId(sttProviderId!, Capability.stt) ??
           '';
@@ -212,14 +221,20 @@ class AppSettings extends ChangeNotifier {
     } else {
       ttsProviderId = _legacyTtsProviderId(p);
     }
+    final lastTts = p.getString(_kLastTtsProviderId);
+    _lastTtsProviderId = (lastTts == null || lastTts.isEmpty)
+        ? ttsProviderId
+        : lastTts;
+    ttsModelId = p.getString(_kTtsModelId) ?? '';
+    ttsVoice = p.getString(_kTtsVoice) ?? '';
     if (ttsProviderId != null) {
       ttsModelId =
-          p.getString(_kTtsModelId) ??
+          (ttsModelId.isEmpty ? null : ttsModelId) ??
           _legacyTtsModelId(p, ttsProviderId!) ??
           _firstModelId(ttsProviderId!, Capability.tts) ??
           '';
       ttsVoice =
-          p.getString(_kTtsVoice) ??
+          (ttsVoice.isEmpty ? null : ttsVoice) ??
           _legacyTtsVoiceValue(p, ttsProviderId!) ??
           _firstVoice(ttsProviderId!, ttsModelId) ??
           '';
@@ -239,7 +254,7 @@ class AppSettings extends ChangeNotifier {
       activeSceneId = scenes.first.id;
     }
 
-    correctionEnabled = p.getBool(_kCorrectionEnabled) ?? false;
+    correctionEnabled = p.getBool(_kCorrectionEnabled) ?? true;
     translationEnabled = p.getBool(_kTranslationEnabled) ?? false;
     translationLangA = p.getString(_kTranslationLangA) ?? '中文';
     translationLangB = p.getString(_kTranslationLangB) ?? '印尼语';
@@ -378,6 +393,18 @@ class AppSettings extends ChangeNotifier {
     return m.voices.first.id;
   }
 
+  String? _firstProviderId(Capability c) {
+    final p = providersFor(c);
+    return p.isEmpty ? null : p.first.id;
+  }
+
+  String? _validProviderId(String? providerId, Capability c) {
+    if (providerId == null || providerId.isEmpty) return null;
+    final provider = findProvider(providerId);
+    if (provider == null || !provider.hasCapability(c)) return null;
+    return providerId;
+  }
+
   /// Snap a selection back to a valid model in the catalog. If the persisted
   /// model id is no longer in the catalog (e.g. removed in an update), pick
   /// the first available one.
@@ -480,12 +507,28 @@ class AppSettings extends ChangeNotifier {
     final p = await _prefs;
     await p.setString(_kSttProviderId, providerId ?? '');
     if (providerId != null) {
-      sttModelId = _firstModelId(providerId, Capability.stt) ?? '';
+      _lastSttProviderId = providerId;
+      await p.setString(_kLastSttProviderId, providerId);
+      final provider = findProvider(providerId);
+      final currentModel = provider?.findModel(sttModelId);
+      if (currentModel == null || !currentModel.supports(Capability.stt)) {
+        sttModelId = _firstModelId(providerId, Capability.stt) ?? '';
+      }
       await p.setString(_kSttModelId, sttModelId);
-    } else {
-      sttModelId = '';
     }
     notifyListeners();
+  }
+
+  Future<void> setSttEnabled(bool enabled) async {
+    if (!enabled) {
+      await setSttProvider(null);
+      return;
+    }
+    final providerId =
+        _validProviderId(_lastSttProviderId, Capability.stt) ??
+        _firstProviderId(Capability.stt);
+    if (providerId == null) return;
+    await setSttProvider(providerId);
   }
 
   Future<void> setSttModel(String modelId) async {
@@ -499,15 +542,33 @@ class AppSettings extends ChangeNotifier {
     final p = await _prefs;
     await p.setString(_kTtsProviderId, providerId ?? '');
     if (providerId != null) {
-      ttsModelId = _firstModelId(providerId, Capability.tts) ?? '';
-      ttsVoice = _firstVoice(providerId, ttsModelId) ?? '';
+      _lastTtsProviderId = providerId;
+      await p.setString(_kLastTtsProviderId, providerId);
+      final provider = findProvider(providerId);
+      final currentModel = provider?.findModel(ttsModelId);
+      if (currentModel == null || !currentModel.supports(Capability.tts)) {
+        ttsModelId = _firstModelId(providerId, Capability.tts) ?? '';
+        ttsVoice = _firstVoice(providerId, ttsModelId) ?? '';
+      } else if (currentModel.voices.isNotEmpty &&
+          !currentModel.voices.any((v) => v.id == ttsVoice)) {
+        ttsVoice = currentModel.voices.first.id;
+      }
       await p.setString(_kTtsModelId, ttsModelId);
       await p.setString(_kTtsVoice, ttsVoice);
-    } else {
-      ttsModelId = '';
-      ttsVoice = '';
     }
     notifyListeners();
+  }
+
+  Future<void> setTtsEnabled(bool enabled) async {
+    if (!enabled) {
+      await setTtsProvider(null);
+      return;
+    }
+    final providerId =
+        _validProviderId(_lastTtsProviderId, Capability.tts) ??
+        _firstProviderId(Capability.tts);
+    if (providerId == null) return;
+    await setTtsProvider(providerId);
   }
 
   Future<void> setTtsModel(String modelId) async {
@@ -764,6 +825,11 @@ class AppSettings extends ChangeNotifier {
   /// only when [includeScenePrompt] is true.
   String composedSystemPrompt() {
     final fused = audioDirectActive;
+    if (!correctionEnabled) {
+      return fused
+          ? '只转录用户音频内容，输出纯文本，不要修正、翻译、解释、添加标签、使用 Markdown 或包含任何时间戳/时间码。'
+          : '';
+    }
     return PromptComposer.compose(
       PromptOptions(
         intent: fused && audioDirectIncludeTranscript

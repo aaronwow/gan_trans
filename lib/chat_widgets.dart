@@ -71,6 +71,174 @@ class _IconPill extends StatelessWidget {
   }
 }
 
+class _RoutingToggle extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String tooltip;
+  final bool enabled;
+  final bool interactive;
+  final VoidCallback? onTap;
+
+  const _RoutingToggle({
+    required this.icon,
+    required this.label,
+    required this.tooltip,
+    required this.enabled,
+    this.interactive = true,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final active = enabled && interactive;
+    final bg = active ? cs.primaryContainer : cs.surfaceContainerHighest;
+    final fg = active ? cs.onPrimaryContainer : cs.onSurfaceVariant;
+    return Tooltip(
+      message: !interactive
+          ? '$tooltip paused by Audio direct'
+          : '$tooltip ${enabled ? "on" : "off"}',
+      child: InkWell(
+        onTap: interactive ? onTap : null,
+        borderRadius: BorderRadius.circular(18),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          height: 36,
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: active ? cs.primary : cs.outlineVariant),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 16, color: fg),
+              const SizedBox(width: 5),
+              Flexible(
+                child: Text(
+                  label,
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
+                  style: TextStyle(
+                    color: fg,
+                    fontSize: 12,
+                    fontWeight: active ? FontWeight.w800 : FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TranslationRoutingToggle extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String languages;
+  final bool enabled;
+  final VoidCallback onToggle;
+  final VoidCallback onLanguagesTap;
+
+  const _TranslationRoutingToggle({
+    required this.icon,
+    required this.label,
+    required this.languages,
+    required this.enabled,
+    required this.onToggle,
+    required this.onLanguagesTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final bg = enabled ? cs.primaryContainer : cs.surfaceContainerHighest;
+    final fg = enabled ? cs.onPrimaryContainer : cs.onSurfaceVariant;
+    final divider = fg.withValues(alpha: 0.24);
+    return Tooltip(
+      message: '$label ${enabled ? "on" : "off"}',
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        height: 42,
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: enabled ? cs.primary : cs.outlineVariant),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Row(
+          children: [
+            Expanded(
+              child: InkWell(
+                onTap: onToggle,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(icon, size: 16, color: fg),
+                      const SizedBox(width: 5),
+                      Flexible(
+                        child: Text(
+                          label,
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: 1,
+                          style: TextStyle(
+                            color: fg,
+                            fontSize: 12,
+                            fontWeight: enabled
+                                ? FontWeight.w800
+                                : FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            Container(width: 1, height: 24, color: divider),
+            Expanded(
+              child: Tooltip(
+                message: 'Change translation languages',
+                child: InkWell(
+                  onTap: onLanguagesTap,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Flexible(
+                          child: Text(
+                            languages,
+                            overflow: TextOverflow.ellipsis,
+                            maxLines: 1,
+                            style: TextStyle(
+                              color: fg,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 3),
+                        Icon(Icons.edit_outlined, size: 13, color: fg),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _ModeToggleButton extends StatelessWidget {
   final VoiceMode mode;
   final VoidCallback onTap;
@@ -304,6 +472,7 @@ class _ProviderModelPicker extends StatelessWidget {
   final String? providerId;
   final String modelId;
   final bool allowOff;
+  final bool enabled;
   final ValueChanged<String?> onProvider;
   final ValueChanged<String> onModel;
 
@@ -312,6 +481,7 @@ class _ProviderModelPicker extends StatelessWidget {
     required this.providerId,
     required this.modelId,
     required this.allowOff,
+    this.enabled = true,
     required this.onProvider,
     required this.onModel,
   });
@@ -336,7 +506,7 @@ class _ProviderModelPicker extends StatelessWidget {
             for (final p in providers)
               DropdownMenuItem<String?>(value: p.id, child: Text(p.name)),
           ],
-          onChanged: onProvider,
+          onChanged: enabled ? onProvider : null,
         ),
         if (selected != null) ...[
           const SizedBox(height: 8),
@@ -361,9 +531,11 @@ class _ProviderModelPicker extends StatelessWidget {
                       ),
                     )
                     .toList(),
-                onChanged: (v) {
-                  if (v != null) onModel(v);
-                },
+                onChanged: enabled
+                    ? (v) {
+                        if (v != null) onModel(v);
+                      }
+                    : null,
               );
             },
           ),

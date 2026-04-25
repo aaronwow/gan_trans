@@ -32,11 +32,18 @@ runtime clients, prompt composition, and pipeline orchestration.
     `realtime`.
   - Use `ModelSpec.supportsDirectAudioTranslate` for chat models that can run
     the fused audio-direct translation/correction path.
+  - If an OpenRouter-hosted Gemini chat model accepts audio and mirrors a
+    Google Gemini model with direct audio support, keep its direct-audio
+    metadata aligned with the Google catalog entry.
   - Do not infer runtime behavior from model ID strings if a catalog field can
     express it.
 
 - `lib/settings.dart`
   - Persists selected providers/models/voices and user voice pipeline settings.
+  - STT/TTS off states disable the route but preserve the last provider,
+    model, and voice so quick toggles can restore the user's prior selection.
+  - When audio-direct chat is active, STT is runtime-paused rather than
+    cleared; UI should show STT as unavailable and keep its saved selection.
   - Builds runtime request objects for chat, STT, and TTS.
   - Keeps `composedSystemPrompt()` as the settings-facing prompt entry point,
     but actual prompt rules live in `PromptComposer`.

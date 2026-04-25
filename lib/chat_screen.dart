@@ -227,24 +227,268 @@ class _ChatScreenState extends State<ChatScreen>
   Widget _topBar() {
     final s = widget.settings;
     final cs = Theme.of(context).colorScheme;
+    final audioDirectActive = s.audioDirectActive;
     return Container(
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
       decoration: BoxDecoration(
         color: cs.surface,
         border: Border(bottom: BorderSide(color: cs.outlineVariant)),
       ),
-      child: Row(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Expanded(
-            child: _PillButton(
-              icon: Icons.theater_comedy_outlined,
-              label: s.activeScene.name,
-              onTap: _openScenes,
-            ),
+          Row(
+            children: [
+              Expanded(
+                child: _PillButton(
+                  icon: Icons.theater_comedy_outlined,
+                  label: s.activeScene.name,
+                  onTap: _openScenes,
+                ),
+              ),
+              const SizedBox(width: 8),
+              _IconPill(icon: Icons.tune, onTap: _openConfigSheet),
+            ],
           ),
-          const SizedBox(width: 8),
-          _IconPill(icon: Icons.tune, onTap: _openConfigSheet),
+          Divider(height: 18, color: cs.outlineVariant.withValues(alpha: 0.7)),
+          Row(
+            children: [
+              Expanded(
+                flex: 2,
+                child: _TranslationRoutingToggle(
+                  icon: Icons.translate,
+                  label: '修正翻译',
+                  languages: '${s.translationLangA} ↔ ${s.translationLangB}',
+                  enabled: s.correctionEnabled,
+                  onToggle: () async {
+                    await s.setCorrectionEnabled(!s.correctionEnabled);
+                    if (mounted) setState(() {});
+                  },
+                  onLanguagesTap: _openTranslationLanguageDialog,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _RoutingToggle(
+                  icon: Icons.graphic_eq,
+                  label: audioDirectActive ? 'STT暂停' : 'STT',
+                  tooltip: 'Speech-to-Text',
+                  enabled: s.sttProviderId != null && !audioDirectActive,
+                  interactive: !audioDirectActive,
+                  onTap: () async {
+                    await s.setSttEnabled(s.sttProviderId == null);
+                    if (mounted) setState(() {});
+                  },
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _RoutingToggle(
+                  icon: Icons.volume_up_outlined,
+                  label: 'TTS',
+                  tooltip: 'Text-to-Speech',
+                  enabled: s.ttsProviderId != null,
+                  onTap: () async {
+                    await s.setTtsEnabled(s.ttsProviderId == null);
+                    if (mounted) setState(() {});
+                  },
+                ),
+              ),
+            ],
+          ),
         ],
+      ),
+    );
+  }
+
+  Future<void> _openTranslationLanguageDialog() async {
+    final s = widget.settings;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) {
+        final cs = Theme.of(ctx).colorScheme;
+        return StatefulBuilder(
+          builder: (ctx, setD) {
+            final langsEqual = s.translationLangA == s.translationLangB;
+            return AlertDialog(
+              title: const Text('Translation languages'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  DropdownButtonFormField<String>(
+                    initialValue: s.translationLangA,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Language A',
+                      isDense: true,
+                    ),
+                    items: kTranslationLanguages
+                        .map((l) => DropdownMenuItem(value: l, child: Text(l)))
+                        .toList(),
+                    onChanged: (v) async {
+                      if (v == null) return;
+                      await s.setTranslationLangA(v);
+                      setD(() {});
+                      if (mounted) setState(() {});
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<String>(
+                    initialValue: s.translationLangB,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Language B',
+                      isDense: true,
+                    ),
+                    items: kTranslationLanguages
+                        .map((l) => DropdownMenuItem(value: l, child: Text(l)))
+                        .toList(),
+                    onChanged: (v) async {
+                      if (v == null) return;
+                      await s.setTranslationLangB(v);
+                      setD(() {});
+                      if (mounted) setState(() {});
+                    },
+                  ),
+                  if (langsEqual)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 10),
+                      child: Row(
+                        children: [
+                          Icon(Icons.info_outline, size: 16, color: cs.error),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              'Pick two different languages.',
+                              style: TextStyle(color: cs.error, fontSize: 12),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Done'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _translationSection(
+    AppSettings s,
+    ColorScheme cs,
+    StateSetter setM,
+    bool langsEqual,
+  ) {
+    return _sheetSection(
+      icon: Icons.translate,
+      title: '修正+翻译',
+      subtitle: s.correctionEnabled
+          ? 'Pick a language pair for corrected output'
+          : 'Correction and translation are off',
+      trailing: Switch(
+        value: s.correctionEnabled,
+        onChanged: (v) async {
+          await s.setCorrectionEnabled(v);
+          setM(() {});
+          if (mounted) setState(() {});
+        },
+      ),
+      child: Opacity(
+        opacity: s.correctionEnabled ? 1 : 0.54,
+        child: Column(
+          children: [
+            _sheetSwitch(
+              title: 'Translate between languages',
+              subtitle: 'Off keeps the correction-only mode.',
+              value: s.translationEnabled,
+              onChanged: !s.correctionEnabled || langsEqual
+                  ? null
+                  : (v) async {
+                      await s.setTranslationEnabled(v);
+                      setM(() {});
+                      if (mounted) setState(() {});
+                    },
+            ),
+            const SizedBox(height: 10),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Expanded(
+                  child: DropdownButtonFormField<String>(
+                    initialValue: s.translationLangA,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Language A',
+                      isDense: true,
+                    ),
+                    items: kTranslationLanguages
+                        .map((l) => DropdownMenuItem(value: l, child: Text(l)))
+                        .toList(),
+                    onChanged: !s.correctionEnabled
+                        ? null
+                        : (v) {
+                            if (v == null) return;
+                            s.setTranslationLangA(v);
+                            setM(() {});
+                            if (mounted) setState(() {});
+                          },
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  child: Icon(
+                    Icons.swap_horiz,
+                    size: 20,
+                    color: cs.onSurfaceVariant,
+                  ),
+                ),
+                Expanded(
+                  child: DropdownButtonFormField<String>(
+                    initialValue: s.translationLangB,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Language B',
+                      isDense: true,
+                    ),
+                    items: kTranslationLanguages
+                        .map((l) => DropdownMenuItem(value: l, child: Text(l)))
+                        .toList(),
+                    onChanged: !s.correctionEnabled
+                        ? null
+                        : (v) {
+                            if (v == null) return;
+                            s.setTranslationLangB(v);
+                            setM(() {});
+                            if (mounted) setState(() {});
+                          },
+                  ),
+                ),
+              ],
+            ),
+            if (langsEqual)
+              Padding(
+                padding: const EdgeInsets.only(top: 10),
+                child: Row(
+                  children: [
+                    Icon(Icons.info_outline, size: 16, color: cs.error),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Pick two different languages.',
+                      style: TextStyle(color: cs.error, fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -282,6 +526,7 @@ class _ChatScreenState extends State<ChatScreen>
             child: StatefulBuilder(
               builder: (ctx, setM) {
                 final langsEqual = s.translationLangA == s.translationLangB;
+                final audioDirectActive = s.audioDirectActive;
                 return ListView(
                   controller: scrollController,
                   children: [
@@ -323,6 +568,49 @@ class _ChatScreenState extends State<ChatScreen>
                       ],
                     ),
                     const SizedBox(height: 16),
+                    _translationSection(s, cs, setM, langsEqual),
+                    const SizedBox(height: 12),
+                    _sheetSection(
+                      icon: Icons.graphic_eq,
+                      title: 'Speech-to-Text',
+                      subtitle: audioDirectActive
+                          ? 'Paused because Audio direct sends audio to Chat'
+                          : 'Recognition provider for microphone input',
+                      child: Opacity(
+                        opacity: audioDirectActive ? 0.54 : 1,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (audioDirectActive) ...[
+                              _sheetNotice(
+                                icon: Icons.info_outline,
+                                text:
+                                    'Audio direct is on. STT is not used for voice turns, and this route is locked until Audio direct is off.',
+                              ),
+                              const SizedBox(height: 10),
+                            ],
+                            _ProviderModelPicker(
+                              cap: Capability.stt,
+                              providerId: s.sttProviderId,
+                              modelId: s.sttModelId,
+                              allowOff: true,
+                              enabled: !audioDirectActive,
+                              onProvider: (id) async {
+                                await s.setSttProvider(id);
+                                setM(() {});
+                                if (mounted) setState(() {});
+                              },
+                              onModel: (id) async {
+                                await s.setSttModel(id);
+                                setM(() {});
+                                if (mounted) setState(() {});
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
                     _sheetSection(
                       icon: Icons.chat_bubble_outline,
                       title: 'Chat',
@@ -338,10 +626,12 @@ class _ChatScreenState extends State<ChatScreen>
                             onProvider: (id) async {
                               await s.setChatProvider(id!);
                               setM(() {});
+                              if (mounted) setState(() {});
                             },
                             onModel: (id) async {
                               await s.setChatModel(id);
                               setM(() {});
+                              if (mounted) setState(() {});
                             },
                           ),
                           const SizedBox(height: 10),
@@ -353,6 +643,7 @@ class _ChatScreenState extends State<ChatScreen>
                             onChanged: (v) async {
                               await s.setIncludeScenePrompt(v);
                               setM(() {});
+                              if (mounted) setState(() {});
                             },
                           ),
                           _sheetSwitch(
@@ -365,6 +656,7 @@ class _ChatScreenState extends State<ChatScreen>
                                 ? (v) async {
                                     await s.setAudioDirectChat(v);
                                     setM(() {});
+                                    if (mounted) setState(() {});
                                   }
                                 : null,
                           ),
@@ -377,29 +669,10 @@ class _ChatScreenState extends State<ChatScreen>
                               onChanged: (v) async {
                                 await s.setAudioDirectIncludeTranscript(v);
                                 setM(() {});
+                                if (mounted) setState(() {});
                               },
                             ),
                         ],
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    _sheetSection(
-                      icon: Icons.graphic_eq,
-                      title: 'Speech-to-Text',
-                      subtitle: 'Recognition provider for microphone input',
-                      child: _ProviderModelPicker(
-                        cap: Capability.stt,
-                        providerId: s.sttProviderId,
-                        modelId: s.sttModelId,
-                        allowOff: true,
-                        onProvider: (id) async {
-                          await s.setSttProvider(id);
-                          setM(() {});
-                        },
-                        onModel: (id) async {
-                          await s.setSttModel(id);
-                          setM(() {});
-                        },
                       ),
                     ),
                     const SizedBox(height: 12),
@@ -415,112 +688,13 @@ class _ChatScreenState extends State<ChatScreen>
                         onProvider: (id) async {
                           await s.setTtsProvider(id);
                           setM(() {});
+                          if (mounted) setState(() {});
                         },
                         onModel: (id) async {
                           await s.setTtsModel(id);
                           setM(() {});
+                          if (mounted) setState(() {});
                         },
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    _sheetSection(
-                      icon: Icons.translate,
-                      title: '修正+翻译',
-                      subtitle: 'Pick a language pair for corrected output',
-                      trailing: Switch(
-                        value: s.translationEnabled,
-                        onChanged: langsEqual
-                            ? null
-                            : (v) {
-                                s.setTranslationEnabled(v);
-                                setM(() {});
-                              },
-                      ),
-                      child: Column(
-                        children: [
-                          Row(
-                            crossAxisAlignment: CrossAxisAlignment.center,
-                            children: [
-                              Expanded(
-                                child: DropdownButtonFormField<String>(
-                                  initialValue: s.translationLangA,
-                                  isExpanded: true,
-                                  decoration: const InputDecoration(
-                                    labelText: 'Language A',
-                                    isDense: true,
-                                  ),
-                                  items: kTranslationLanguages
-                                      .map(
-                                        (l) => DropdownMenuItem(
-                                          value: l,
-                                          child: Text(l),
-                                        ),
-                                      )
-                                      .toList(),
-                                  onChanged: (v) {
-                                    if (v == null) return;
-                                    s.setTranslationLangA(v);
-                                    setM(() {});
-                                  },
-                                ),
-                              ),
-                              Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 8,
-                                ),
-                                child: Icon(
-                                  Icons.swap_horiz,
-                                  size: 20,
-                                  color: cs.onSurfaceVariant,
-                                ),
-                              ),
-                              Expanded(
-                                child: DropdownButtonFormField<String>(
-                                  initialValue: s.translationLangB,
-                                  isExpanded: true,
-                                  decoration: const InputDecoration(
-                                    labelText: 'Language B',
-                                    isDense: true,
-                                  ),
-                                  items: kTranslationLanguages
-                                      .map(
-                                        (l) => DropdownMenuItem(
-                                          value: l,
-                                          child: Text(l),
-                                        ),
-                                      )
-                                      .toList(),
-                                  onChanged: (v) {
-                                    if (v == null) return;
-                                    s.setTranslationLangB(v);
-                                    setM(() {});
-                                  },
-                                ),
-                              ),
-                            ],
-                          ),
-                          if (langsEqual)
-                            Padding(
-                              padding: const EdgeInsets.only(top: 10),
-                              child: Row(
-                                children: [
-                                  Icon(
-                                    Icons.info_outline,
-                                    size: 16,
-                                    color: cs.error,
-                                  ),
-                                  const SizedBox(width: 6),
-                                  Text(
-                                    'Pick two different languages.',
-                                    style: TextStyle(
-                                      color: cs.error,
-                                      fontSize: 12,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                        ],
                       ),
                     ),
                   ],
@@ -629,6 +803,30 @@ class _ChatScreenState extends State<ChatScreen>
             ),
           ),
           Switch(value: value, onChanged: onChanged),
+        ],
+      ),
+    );
+  }
+
+  Widget _sheetNotice({required IconData icon, required String text}) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: cs.tertiaryContainer.withValues(alpha: 0.42),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, size: 16, color: cs.onTertiaryContainer),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              text,
+              style: TextStyle(color: cs.onTertiaryContainer, fontSize: 12),
+            ),
+          ),
         ],
       ),
     );

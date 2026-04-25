@@ -105,15 +105,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _settingsSection(
             icon: Icons.graphic_eq,
             title: 'Speech-to-Text',
-            subtitle: 'Recognition model for microphone input.',
+            subtitle: s.audioDirectActive
+                ? 'Paused because Audio direct sends audio to Chat.'
+                : 'Recognition model for microphone input.',
             children: [
-              _capabilityPicker(
-                cap: Capability.stt,
-                providerId: s.sttProviderId,
-                modelId: s.sttModelId,
-                onProvider: (id) => s.setSttProvider(id),
-                onModel: (id) => s.setSttModel(id),
-                allowOff: true,
+              Opacity(
+                opacity: s.audioDirectActive ? 0.54 : 1,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (s.audioDirectActive) ...[
+                      _settingsNotice(
+                        icon: Icons.info_outline,
+                        text:
+                            'Audio direct is on. STT is not used for voice turns, and this route is locked until Audio direct is off.',
+                      ),
+                      const SizedBox(height: 10),
+                    ],
+                    _capabilityPicker(
+                      cap: Capability.stt,
+                      providerId: s.sttProviderId,
+                      modelId: s.sttModelId,
+                      onProvider: (id) => s.setSttProvider(id),
+                      onModel: (id) => s.setSttModel(id),
+                      allowOff: true,
+                      enabled: !s.audioDirectActive,
+                    ),
+                  ],
+                ),
               ),
             ],
           ),
@@ -446,6 +465,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  Widget _settingsNotice({required IconData icon, required String text}) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: cs.tertiaryContainer.withValues(alpha: 0.42),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, size: 16, color: cs.onTertiaryContainer),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              text,
+              style: TextStyle(color: cs.onTertiaryContainer, fontSize: 12),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _settingsSlider({
     required String title,
     required String valueText,
@@ -584,6 +627,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     required ValueChanged<String?> onProvider,
     required ValueChanged<String> onModel,
     required bool allowOff,
+    bool enabled = true,
   }) {
     final s = widget.settings;
     final cs = Theme.of(context).colorScheme;
@@ -632,10 +676,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               ),
           ],
-          onChanged: (v) {
-            onProvider(v);
-            setState(() {});
-          },
+          onChanged: enabled
+              ? (v) {
+                  onProvider(v);
+                  setState(() {});
+                }
+              : null,
         ),
         if (selectedProvider != null) ...[
           const SizedBox(height: 8),
@@ -660,11 +706,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                     )
                     .toList(),
-                onChanged: (v) {
-                  if (v == null) return;
-                  onModel(v);
-                  setState(() {});
-                },
+                onChanged: enabled
+                    ? (v) {
+                        if (v == null) return;
+                        onModel(v);
+                        setState(() {});
+                      }
+                    : null,
               );
             },
           ),

@@ -26,6 +26,23 @@ void main() {
     expect(tts.voices.map((v) => v.id), contains('Kore'));
   });
 
+  test('OpenRouter Gemini chat models expose direct audio translation', () {
+    final openrouter = findProvider('openrouter')!;
+
+    for (final modelId in [
+      'google/gemini-3-flash-preview',
+      'google/gemini-3.1-flash-lite-preview',
+      'google/gemini-2.5-pro',
+      'google/gemini-2.5-flash',
+      'google/gemini-2.0-flash-001',
+    ]) {
+      final model = openrouter.findModel(modelId)!;
+      expect(model.supports(Capability.chat), isTrue, reason: modelId);
+      expect(model.acceptsAudio(), isTrue, reason: modelId);
+      expect(model.canTranslateAudioDirect, isTrue, reason: modelId);
+    }
+  });
+
   test('ElevenLabs exposes batch STT and TTS models only', () {
     final elevenlabs = findProvider('elevenlabs')!;
 
