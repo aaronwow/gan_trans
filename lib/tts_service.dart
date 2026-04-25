@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'catalog.dart';
 
 const _openAiSpeechUrl = 'https://api.openai.com/v1/audio/speech';
+const _elevenlabsBaseUrl = 'https://api.elevenlabs.io/v1';
 const _geminiUrl = 'https://generativelanguage.googleapis.com/v1beta';
 const _doubaoTtsUrl =
     'https://openspeech.bytedance.com/api/v3/tts/unidirectional';
@@ -81,6 +82,9 @@ class TtsService {
         case ApiDialect.openaiSpeech:
           await _speakOpenAi(text, request, c, timeout);
           return;
+        case ApiDialect.elevenlabsSpeech:
+          await _speakElevenLabs(text, request, c, timeout);
+          return;
         case ApiDialect.volcTtsDoubao:
           await _speakDoubao(text, request, c, timeout);
           return;
@@ -121,6 +125,39 @@ class TtsService {
         .timeout(timeout);
     if (resp.statusCode >= 400) {
       throw Exception('OpenAI TTS ${resp.statusCode}: ${resp.body}');
+    }
+    await _player.play(
+      BytesSource(Uint8List.fromList(resp.bodyBytes), mimeType: 'audio/mpeg'),
+    );
+  }
+
+  Future<void> _speakElevenLabs(
+    String text,
+    TtsRequest req,
+    http.Client client,
+    Duration timeout,
+  ) async {
+    final apiKey = req.creds[CredentialField.apiKey] ?? '';
+    if (apiKey.isEmpty) {
+      throw Exception('ElevenLabs API key is empty — set it in Settings.');
+    }
+    if (req.voice.isEmpty) {
+      throw Exception(
+        'ElevenLabs voice is empty — choose a voice in Settings.',
+      );
+    }
+    final resp = await client
+        .post(
+          Uri.parse(
+            '$_elevenlabsBaseUrl/text-to-speech/${req.voice}'
+            '?output_format=mp3_44100_128',
+          ),
+          headers: {'Content-Type': 'application/json', 'xi-api-key': apiKey},
+          body: jsonEncode({'text': text, 'model_id': req.modelId}),
+        )
+        .timeout(timeout);
+    if (resp.statusCode >= 400) {
+      throw Exception('ElevenLabs TTS ${resp.statusCode}: ${resp.body}');
     }
     await _player.play(
       BytesSource(Uint8List.fromList(resp.bodyBytes), mimeType: 'audio/mpeg'),

@@ -492,6 +492,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (p.hasCapability(Capability.tts)) 'TTS',
     ].join(' · ');
     final cs = Theme.of(context).colorScheme;
+    final hasKey = s.hasCredentials(p.id);
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
@@ -511,6 +512,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     style: const TextStyle(fontWeight: FontWeight.w700),
                   ),
                 ),
+                if (!hasKey) ...[
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: cs.errorContainer,
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(
+                      'no API key',
+                      style: TextStyle(
+                        color: cs.onErrorContainer,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ],
                 const SizedBox(width: 8),
                 Container(
                   padding: const EdgeInsets.symmetric(
@@ -542,7 +564,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   isDense: true,
                   prefixIcon: const Icon(Icons.lock_outline, size: 18),
                 ),
-                onChanged: (v) => s.setCredential(p.id, f, v),
+                onChanged: (v) {
+                  s.setCredential(p.id, f, v);
+                  setState(() {});
+                },
               ),
               const SizedBox(height: 8),
             ],
@@ -560,6 +585,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     required ValueChanged<String> onModel,
     required bool allowOff,
   }) {
+    final s = widget.settings;
+    final cs = Theme.of(context).colorScheme;
     final providers = providersFor(cap).toList();
     final selectedProvider = findProvider(providerId);
     return Column(
@@ -576,7 +603,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
             if (allowOff)
               const DropdownMenuItem<String?>(value: null, child: Text('Off')),
             for (final p in providers)
-              DropdownMenuItem<String?>(value: p.id, child: Text(p.name)),
+              DropdownMenuItem<String?>(
+                value: p.id,
+                enabled: s.hasCredentials(p.id),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        p.name,
+                        style: TextStyle(
+                          color: s.hasCredentials(p.id)
+                              ? null
+                              : cs.onSurfaceVariant.withValues(alpha: 0.5),
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    if (!s.hasCredentials(p.id))
+                      Text(
+                        'no API key',
+                        style: TextStyle(
+                          color: cs.error,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
           ],
           onChanged: (v) {
             onProvider(v);

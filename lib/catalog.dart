@@ -18,8 +18,13 @@ enum ApiDialect {
   geminiSpeech, // POST {baseUrl}/models/{model}:generateContent?key= (AUDIO)
   openaiTranscribe, // POST {baseUrl}/audio/transcriptions (multipart)
   openaiSpeech, // POST {baseUrl}/audio/speech
+  elevenlabsSpeech, // POST {baseUrl}/text-to-speech/{voice_id}
   volcSttFlash, // POST openspeech /api/v3/auc/bigmodel/recognize/flash
   volcTtsDoubao, // POST openspeech /api/v3/tts/unidirectional
+  // ElevenLabs Scribe batch — POST /v1/speech-to-text.
+  elevenlabsScribe,
+  // Soniox v4 async — REST /v1 file upload + transcription job.
+  sonioxStt,
 }
 
 /// Credential fields a provider can require. The name is the persistence key
@@ -660,9 +665,99 @@ const _volcengine = ProviderSpec(
   ],
 );
 
+const _elevenlabsVoices = [
+  // Official docs examples. Users can replace these with any voice ID once
+  // custom voice configuration is added.
+  TtsVoice('JBFqnCBsd6RMkjVDRZzb', 'George'),
+  TtsVoice('21m00Tcm4TlvDq8ikWAM', 'Rachel'),
+];
+
+// ---- ElevenLabs (Scribe v2 + Text to Speech) ----
+
+const _elevenlabs = ProviderSpec(
+  id: 'elevenlabs',
+  name: 'ElevenLabs',
+  baseUrl: 'https://api.elevenlabs.io',
+  dialects: {
+    Capability.stt: ApiDialect.elevenlabsScribe,
+    Capability.tts: ApiDialect.elevenlabsSpeech,
+  },
+  credentials: [CredentialField.apiKey],
+  models: [
+    // Batch — POST /v1/speech-to-text (multipart, model_id=scribe_v2).
+    ModelSpec(
+      id: 'scribe_v2',
+      label: 'Scribe v2 (batch)',
+      caps: {Capability.stt},
+    ),
+    // TTS — POST /v1/text-to-speech/{voice_id}.
+    ModelSpec(
+      id: 'eleven_flash_v2_5',
+      label: 'Eleven Flash v2.5',
+      caps: {Capability.tts},
+      voices: _elevenlabsVoices,
+    ),
+    ModelSpec(
+      id: 'eleven_flash_v2',
+      label: 'Eleven Flash v2',
+      caps: {Capability.tts},
+      voices: _elevenlabsVoices,
+    ),
+    ModelSpec(
+      id: 'eleven_turbo_v2_5',
+      label: 'Eleven Turbo v2.5',
+      caps: {Capability.tts},
+      voices: _elevenlabsVoices,
+    ),
+    ModelSpec(
+      id: 'eleven_turbo_v2',
+      label: 'Eleven Turbo v2',
+      caps: {Capability.tts},
+      voices: _elevenlabsVoices,
+    ),
+    ModelSpec(
+      id: 'eleven_multilingual_v2',
+      label: 'Eleven Multilingual v2',
+      caps: {Capability.tts},
+      voices: _elevenlabsVoices,
+    ),
+    ModelSpec(
+      id: 'eleven_v3',
+      label: 'Eleven v3',
+      caps: {Capability.tts},
+      voices: _elevenlabsVoices,
+    ),
+  ],
+);
+
+// ---- Soniox (v4 async) ----
+
+const _soniox = ProviderSpec(
+  id: 'soniox',
+  name: 'Soniox',
+  baseUrl: 'https://api.soniox.com',
+  dialects: {Capability.stt: ApiDialect.sonioxStt},
+  credentials: [CredentialField.apiKey],
+  models: [
+    // Async — REST api.soniox.com/v1 (file upload + transcription, webhook).
+    ModelSpec(
+      id: 'stt-async-v4',
+      label: 'Soniox v4 (async)',
+      caps: {Capability.stt},
+    ),
+  ],
+);
+
 // ---- Catalog ----
 
-const kCatalog = <ProviderSpec>[_openAi, _google, _openRouter, _volcengine];
+const kCatalog = <ProviderSpec>[
+  _openAi,
+  _google,
+  _openRouter,
+  _volcengine,
+  _elevenlabs,
+  _soniox,
+];
 
 ProviderSpec? findProvider(String? id) {
   if (id == null) return null;

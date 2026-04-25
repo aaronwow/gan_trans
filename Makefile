@@ -91,7 +91,7 @@ profile-ios:
 	$(FLUTTER) run --profile -d ios $(RUN_ARGS) -t $(MAIN)
 
 release:
-	$(FLUTTER) run --release $(RUN_ARGS) -t $(MAIN)
+	$(FLUTTER) run --release -d $(IPHONE_DEVICE_ID) $(RUN_ARGS) -t $(MAIN)
 
 release-ios:
 	$(FLUTTER) run --release -d ios $(RUN_ARGS) -t $(MAIN)

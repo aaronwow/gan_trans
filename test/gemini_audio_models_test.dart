@@ -24,6 +24,43 @@ void main() {
     expect(tts.voices.map((v) => v.id), contains('Kore'));
   });
 
+  test('ElevenLabs exposes batch STT and TTS models only', () {
+    final elevenlabs = findProvider('elevenlabs')!;
+
+    expect(elevenlabs.dialects[Capability.stt], ApiDialect.elevenlabsScribe);
+    expect(elevenlabs.dialects[Capability.tts], ApiDialect.elevenlabsSpeech);
+
+    expect(elevenlabs.findModel('scribe_v2')!.supports(Capability.stt), isTrue);
+    expect(elevenlabs.findModel('scribe_v2_realtime'), isNull);
+
+    for (final modelId in [
+      'eleven_flash_v2_5',
+      'eleven_flash_v2',
+      'eleven_turbo_v2_5',
+      'eleven_turbo_v2',
+      'eleven_multilingual_v2',
+      'eleven_v3',
+    ]) {
+      final model = elevenlabs.findModel(modelId)!;
+      expect(model.supports(Capability.tts), isTrue);
+      expect(model.voices.map((v) => v.id), contains('JBFqnCBsd6RMkjVDRZzb'));
+    }
+  });
+
+  test(
+    'Realtime-only STT providers are hidden until streaming is implemented',
+    () {
+      final soniox = findProvider('soniox')!;
+
+      expect(
+        soniox.findModel('stt-async-v4')!.supports(Capability.stt),
+        isTrue,
+      );
+      expect(soniox.findModel('stt-rt-v4'), isNull);
+      expect(findProvider('speechmatics'), isNull);
+    },
+  );
+
   test('Gemini STT prompts chat models to transcribe only', () async {
     final audio = await File(
       '${Directory.systemTemp.path}/gemini-stt.wav',

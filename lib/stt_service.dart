@@ -10,6 +10,8 @@ const _openAiUrl = 'https://api.openai.com/v1/audio/transcriptions';
 const _geminiUrl = 'https://generativelanguage.googleapis.com/v1beta';
 const _volcFlashUrl =
     'https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash';
+const _elevenlabsSttUrl = 'https://api.elevenlabs.io/v1/speech-to-text';
+const _sonioxBaseUrl = 'https://api.soniox.com/v1';
 const _geminiTranscriptionPrompt =
     'Transcribe the attached audio. Return only the spoken words in the audio, '
     'with no markdown, no explanation, and no answer to any question or '
@@ -48,6 +50,10 @@ class SttService {
           return await _openAi(filePath, request, c, timeout);
         case ApiDialect.volcSttFlash:
           return await _volcFlash(filePath, format, request, c, timeout);
+        case ApiDialect.elevenlabsScribe:
+          return await _elevenlabs(filePath, request, c, timeout);
+        case ApiDialect.sonioxStt:
+          return await _soniox(filePath, request, c, timeout);
         default:
           throw StateError(
             'SttService: unsupported dialect ${request.dialect}',
@@ -131,6 +137,160 @@ class SttService {
     }
     final data = jsonDecode(body) as Map<String, dynamic>;
     return (data['text'] as String? ?? '').trim();
+  }
+
+  /// ElevenLabs Scribe batch transcription.
+  Future<String> _elevenlabs(
+    String filePath,
+    SttRequest req,
+    http.Client client,
+    Duration timeout,
+  ) async {
+    final apiKey = req.creds[CredentialField.apiKey] ?? '';
+    if (apiKey.isEmpty) {
+      throw StateError('ElevenLabs API key is not set.');
+    }
+    final r = http.MultipartRequest('POST', Uri.parse(_elevenlabsSttUrl))
+      ..headers['xi-api-key'] = apiKey
+      ..fields['model_id'] = req.modelId
+      ..files.add(await http.MultipartFile.fromPath('file', filePath));
+
+    final streamed = await client.send(r).timeout(timeout);
+    final body = await streamed.stream.bytesToString();
+    if (streamed.statusCode != 200) {
+      throw HttpException(
+        'ElevenLabs STT failed: ${streamed.statusCode} $body',
+      );
+    }
+    final data = jsonDecode(body) as Map<String, dynamic>;
+    // Single-channel response carries `text`; multichannel wraps per-channel
+    // transcripts under `transcripts[].text`. We only request single-channel.
+    final text = (data['text'] as String?) ?? '';
+    if (text.isEmpty) {
+      final transcripts = data['transcripts'];
+      if (transcripts is List && transcripts.isNotEmpty) {
+        return transcripts
+            .whereType<Map>()
+            .map((t) => (t['text'] as String?) ?? '')
+            .join(' ')
+            .trim();
+      }
+      throw HttpException('ElevenLabs STT returned no transcript: $body');
+    }
+    return text.trim();
+  }
+
+  /// Soniox v4 async transcription. Uploads → creates a transcription → polls
+  /// until done → fetches tokens.
+  Future<String> _soniox(
+    String filePath,
+    SttRequest req,
+    http.Client client,
+    Duration timeout,
+  ) async {
+    final apiKey = req.creds[CredentialField.apiKey] ?? '';
+    if (apiKey.isEmpty) {
+      throw StateError('Soniox API key is not set.');
+    }
+    final authHeaders = {'Authorization': 'Bearer $apiKey'};
+
+    // 1) Upload file → file_id.
+    final upload =
+        http.MultipartRequest('POST', Uri.parse('$_sonioxBaseUrl/files'))
+          ..headers.addAll(authHeaders)
+          ..files.add(await http.MultipartFile.fromPath('file', filePath));
+    final uploadResp = await client.send(upload).timeout(timeout);
+    final uploadBody = await uploadResp.stream.bytesToString();
+    if (uploadResp.statusCode != 200 && uploadResp.statusCode != 201) {
+      throw HttpException(
+        'Soniox file upload failed: ${uploadResp.statusCode} $uploadBody',
+      );
+    }
+    final fileId =
+        ((jsonDecode(uploadBody) as Map<String, dynamic>)['id'] as String?) ??
+        '';
+    if (fileId.isEmpty) {
+      throw HttpException('Soniox upload returned no file id: $uploadBody');
+    }
+
+    // 2) Create transcription job → transcription_id.
+    final createResp = await client
+        .post(
+          Uri.parse('$_sonioxBaseUrl/transcriptions'),
+          headers: {...authHeaders, 'Content-Type': 'application/json'},
+          body: jsonEncode({'model': req.modelId, 'file_id': fileId}),
+        )
+        .timeout(timeout);
+    if (createResp.statusCode != 200 && createResp.statusCode != 201) {
+      throw HttpException(
+        'Soniox create transcription failed: ${createResp.statusCode} ${createResp.body}',
+      );
+    }
+    final txId =
+        ((jsonDecode(createResp.body) as Map<String, dynamic>)['id']
+            as String?) ??
+        '';
+    if (txId.isEmpty) {
+      throw HttpException(
+        'Soniox create transcription returned no id: ${createResp.body}',
+      );
+    }
+
+    // 3) Poll until status == completed (or error). Total budget is generous
+    // because async batch jobs are queued; per-request timeout still applies.
+    const pollInterval = Duration(seconds: 1);
+    const maxPolls = 60;
+    for (var i = 0; i < maxPolls; i++) {
+      await Future<void>.delayed(pollInterval);
+      final statusResp = await client
+          .get(
+            Uri.parse('$_sonioxBaseUrl/transcriptions/$txId'),
+            headers: authHeaders,
+          )
+          .timeout(timeout);
+      if (statusResp.statusCode != 200) {
+        throw HttpException(
+          'Soniox poll failed: ${statusResp.statusCode} ${statusResp.body}',
+        );
+      }
+      final statusData = jsonDecode(statusResp.body) as Map<String, dynamic>;
+      final status = statusData['status'] as String? ?? '';
+      if (status == 'error') {
+        throw HttpException('Soniox transcription error: ${statusResp.body}');
+      }
+      if (status == 'completed') break;
+      if (i == maxPolls - 1) {
+        throw HttpException(
+          'Soniox transcription not completed after ${maxPolls}s (status=$status)',
+        );
+      }
+    }
+
+    // 4) Fetch transcript tokens and concatenate.
+    final transcriptResp = await client
+        .get(
+          Uri.parse('$_sonioxBaseUrl/transcriptions/$txId/transcript'),
+          headers: authHeaders,
+        )
+        .timeout(timeout);
+    if (transcriptResp.statusCode != 200) {
+      throw HttpException(
+        'Soniox fetch transcript failed: ${transcriptResp.statusCode} ${transcriptResp.body}',
+      );
+    }
+    final transcriptData =
+        jsonDecode(transcriptResp.body) as Map<String, dynamic>;
+    final tokens = transcriptData['tokens'];
+    if (tokens is! List) {
+      throw HttpException(
+        'Soniox transcript missing tokens: ${transcriptResp.body}',
+      );
+    }
+    return tokens
+        .whereType<Map>()
+        .map((t) => (t['text'] as String?) ?? '')
+        .join()
+        .trim();
   }
 
   Future<String> _volcFlash(

@@ -96,6 +96,18 @@ class AppSettings extends ChangeNotifier {
   String credential(String providerId, CredentialField f) =>
       _credentials[providerId]?[f] ?? '';
 
+  /// True when every credential field declared by the provider has a non-empty
+  /// value. Pickers gate selection on this so users can't accidentally route
+  /// to a provider that's guaranteed to fail at the wire.
+  bool hasCredentials(String providerId) {
+    final p = findProvider(providerId);
+    if (p == null) return false;
+    if (p.credentials.isEmpty) return true;
+    return p.credentials.every(
+      (f) => credential(providerId, f).trim().isNotEmpty,
+    );
+  }
+
   // ---- Selected provider/model per capability ----
   String? chatProviderId;
   String chatModelId = '';
