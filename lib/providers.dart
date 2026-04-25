@@ -103,11 +103,16 @@ class ChatClient {
           body: jsonEncode(payload),
         )
         .timeout(timeout);
+    final bodyStr = utf8.decode(resp.bodyBytes);
     if (resp.statusCode >= 400) {
-      throw Exception('Chat ${resp.statusCode}: ${resp.body}');
+      throw Exception('Chat ${resp.statusCode}: $bodyStr');
     }
-    final data = jsonDecode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
-    final msg = data['choices'][0]['message'] as Map<String, dynamic>;
+    final data = jsonDecode(bodyStr) as Map<String, dynamic>;
+    final choices = data['choices'] as List?;
+    if (choices == null || choices.isEmpty) {
+      throw Exception('Chat: empty choices: $bodyStr');
+    }
+    final msg = choices.first['message'] as Map<String, dynamic>;
     // gpt-4o-audio-preview returns a string in 'content', or in some configs
     // an 'audio' object; we only consume text here.
     final c1 = msg['content'];
@@ -156,15 +161,36 @@ class ChatClient {
           body: jsonEncode(body),
         )
         .timeout(timeout);
+    final bodyStr = utf8.decode(resp.bodyBytes);
     if (resp.statusCode >= 400) {
-      throw Exception('Gemini ${resp.statusCode}: ${resp.body}');
+      throw Exception('Gemini ${resp.statusCode}: $bodyStr');
     }
-    final data = jsonDecode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+    final data = jsonDecode(bodyStr) as Map<String, dynamic>;
     final candidates = data['candidates'] as List?;
+    final promptFeedback = data['promptFeedback'];
     if (candidates == null || candidates.isEmpty) {
-      throw Exception('Gemini: empty response: ${resp.body}');
+      // Prompt-level block (e.g. safety on the input audio) carries no
+      // candidates — the reason lives in promptFeedback.blockReason.
+      if (promptFeedback is Map && promptFeedback['blockReason'] != null) {
+        throw Exception(
+            'Gemini blocked the prompt: ${promptFeedback['blockReason']} '
+            '(safetyRatings=${promptFeedback['safetyRatings']})');
+      }
+      throw Exception('Gemini: empty response: $bodyStr');
     }
-    final parts = candidates.first['content']['parts'] as List;
+    final cand = candidates.first as Map<String, dynamic>;
+    final content = cand['content'];
+    final parts = content is Map ? content['parts'] : null;
+    if (parts is! List) {
+      // No parts — usually means finishReason is SAFETY / RECITATION /
+      // PROHIBITED_CONTENT / MAX_TOKENS / OTHER. Surface it explicitly so the
+      // UI shows a real error instead of a Null cast crash.
+      final reason = cand['finishReason'];
+      throw Exception(
+          'Gemini returned no content (finishReason=$reason, '
+          'safetyRatings=${cand['safetyRatings']}, '
+          'promptFeedback=$promptFeedback)');
+    }
     return parts.map((p) => p['text'] ?? '').join();
   }
 }

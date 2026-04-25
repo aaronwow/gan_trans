@@ -28,6 +28,7 @@ const kTranslationLanguages = <String>[
   '阿拉伯语',
   '泰语',
   '越南语',
+  '老挝语',
 ];
 
 class AppSettings extends ChangeNotifier {

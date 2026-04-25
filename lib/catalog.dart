@@ -122,8 +122,23 @@ const _openAi = ProviderSpec(
     ModelSpec(id: 'gpt-4.1', label: 'gpt-4.1', caps: {Capability.chat}),
     ModelSpec(id: 'gpt-4.1-mini', label: 'gpt-4.1-mini', caps: {Capability.chat}),
     ModelSpec(
+        id: 'gpt-audio',
+        label: 'gpt-audio (text + audio)',
+        caps: {Capability.chat},
+        inputs: {Modality.text, Modality.audio}),
+    ModelSpec(
+        id: 'gpt-audio-mini',
+        label: 'gpt-audio-mini (text + audio)',
+        caps: {Capability.chat},
+        inputs: {Modality.text, Modality.audio}),
+    ModelSpec(
         id: 'gpt-4o-audio-preview',
         label: 'gpt-4o-audio-preview (text + audio)',
+        caps: {Capability.chat},
+        inputs: {Modality.text, Modality.audio}),
+    ModelSpec(
+        id: 'gpt-4o-mini-audio-preview',
+        label: 'gpt-4o-mini-audio-preview (text + audio)',
         caps: {Capability.chat},
         inputs: {Modality.text, Modality.audio}),
     // STT
@@ -167,6 +182,11 @@ const _google = ProviderSpec(
     ModelSpec(
         id: 'gemini-3-flash-preview',
         label: 'gemini-3-flash-preview',
+        caps: {Capability.chat},
+        inputs: {Modality.text, Modality.audio}),
+    ModelSpec(
+        id: 'gemini-3.1-flash-lite-preview',
+        label: 'gemini-3.1-flash-lite-preview',
         caps: {Capability.chat},
         inputs: {Modality.text, Modality.audio}),
     ModelSpec(
@@ -239,8 +259,33 @@ const _openRouter = ProviderSpec(
         label: 'GPT-4o mini',
         caps: {Capability.chat}),
     ModelSpec(
+        id: 'openai/gpt-audio',
+        label: 'GPT Audio',
+        caps: {Capability.chat},
+        inputs: {Modality.text, Modality.audio}),
+    ModelSpec(
+        id: 'openai/gpt-audio-mini',
+        label: 'GPT Audio Mini',
+        caps: {Capability.chat},
+        inputs: {Modality.text, Modality.audio}),
+    ModelSpec(
         id: 'openai/gpt-4o-audio-preview',
         label: 'GPT-4o audio preview',
+        caps: {Capability.chat},
+        inputs: {Modality.text, Modality.audio}),
+    ModelSpec(
+        id: 'google/gemini-3-flash-preview',
+        label: 'Gemini 3 Flash Preview',
+        caps: {Capability.chat},
+        inputs: {Modality.text, Modality.audio}),
+    ModelSpec(
+        id: 'google/gemini-3.1-flash-lite-preview',
+        label: 'Gemini 3.1 Flash Lite Preview',
+        caps: {Capability.chat},
+        inputs: {Modality.text, Modality.audio}),
+    ModelSpec(
+        id: 'google/gemini-2.0-flash-001',
+        label: 'Gemini 2.0 Flash',
         caps: {Capability.chat},
         inputs: {Modality.text, Modality.audio}),
     ModelSpec(
