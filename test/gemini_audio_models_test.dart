@@ -18,6 +18,8 @@ void main() {
     expect(stt.supports(Capability.chat), isTrue);
     expect(stt.supports(Capability.stt), isTrue);
     expect(stt.acceptsAudio(), isTrue);
+    expect(stt.canTranslateAudioDirect, isTrue);
+    expect(stt.sttTransport, SttTransport.batchUpload);
 
     final tts = google.findModel('gemini-3.1-flash-tts-preview')!;
     expect(tts.supports(Capability.tts), isTrue);
@@ -31,6 +33,10 @@ void main() {
     expect(elevenlabs.dialects[Capability.tts], ApiDialect.elevenlabsSpeech);
 
     expect(elevenlabs.findModel('scribe_v2')!.supports(Capability.stt), isTrue);
+    expect(
+      elevenlabs.findModel('scribe_v2')!.sttTransport,
+      SttTransport.batchUpload,
+    );
     expect(elevenlabs.findModel('scribe_v2_realtime'), isNull);
 
     for (final modelId in [
@@ -55,6 +61,10 @@ void main() {
       expect(
         soniox.findModel('stt-async-v4')!.supports(Capability.stt),
         isTrue,
+      );
+      expect(
+        soniox.findModel('stt-async-v4')!.sttTransport,
+        SttTransport.asyncJob,
       );
       expect(soniox.findModel('stt-rt-v4'), isNull);
       expect(findProvider('speechmatics'), isNull);

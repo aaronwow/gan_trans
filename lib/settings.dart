@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'catalog.dart';
+import 'prompt_composer.dart';
 import 'scenes.dart';
 import 'stt_service.dart';
 import 'tts_service.dart';
@@ -580,12 +581,13 @@ class AppSettings extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// True iff the currently-selected chat model accepts audio input.
+  /// True iff the selected chat model can handle the direct audio translation
+  /// strategy, not merely attach arbitrary audio.
   bool get chatModelAcceptsAudio {
     final pid = chatProviderId;
     if (pid == null) return false;
     final m = findProvider(pid)?.findModel(chatModelId);
-    return m?.acceptsAudio() ?? false;
+    return m?.canTranslateAudioDirect ?? false;
   }
 
   /// True iff audio-direct mode is both enabled and supported by the current
@@ -761,32 +763,21 @@ class AppSettings extends ChangeNotifier {
   /// and an optional JSON output schema is added. Scene prompt is included
   /// only when [includeScenePrompt] is true.
   String composedSystemPrompt() {
-    final a = translationLangA.trim().isEmpty ? '中文' : translationLangA.trim();
-    final b = translationLangB.trim().isEmpty ? '印尼语' : translationLangB.trim();
-    final sceneText = activeScene.prompt.trim();
-    final scene = (includeScenePrompt && sceneText.isNotEmpty)
-        ? '$sceneText。'
-        : '';
     final fused = audioDirectActive;
-    final lead = fused ? '' : '用户输入的文字是STT转换的结果，';
-    final task = translationEnabled
-        ? '如果输入是$a，翻译成$b；如果输入是$b，翻译成$a。'
-        : '修正输入文字。';
-    final outputRule = translationEnabled
-        ? '只输出最终翻译后的内容，不要包含原文、解释、标签、引号、Markdown 或任何额外文字。'
-        : '只输出修正后的文字，不要包含解释、标签、引号、Markdown 或任何额外文字。';
-
-    if (fused && audioDirectIncludeTranscript) {
-      // Strict JSON schema: transcript = ASR-style raw transcription, output =
-      // corrected/translated text. Timecodes/markdown explicitly forbidden so
-      // Gemini doesn't prepend "00:00" / append "00:04" timestamps.
-      return '$scene$task严格按以下 JSON 输出，不要使用 Markdown 代码块，不要包含任何时间戳或时间码（例如 00:00、00:04）：'
-          '{"transcript": "音频的原始转录文字", "output": "最终翻译后的内容或修正后的文字"}';
-    }
-    if (fused) {
-      return '$scene$task$outputRule不要包含任何时间戳或时间码（例如 00:00、00:04）。';
-    }
-    return '$lead$scene$task$outputRule';
+    return PromptComposer.compose(
+      PromptOptions(
+        intent: fused && audioDirectIncludeTranscript
+            ? PromptIntent.directAudioJsonTranscriptAndOutput
+            : (fused
+                  ? PromptIntent.directAudioTranslateOrCorrect
+                  : PromptIntent.textTranslateOrCorrect),
+        translationEnabled: translationEnabled,
+        translationLangA: translationLangA,
+        translationLangB: translationLangB,
+        scenePrompt: activeScene.prompt,
+        includeScenePrompt: includeScenePrompt,
+      ),
+    );
   }
 }
 

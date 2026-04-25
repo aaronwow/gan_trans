@@ -11,6 +11,11 @@ enum Capability { chat, stt, tts }
 /// [Modality.audio] — these can be used as a single fused STT+chat step.
 enum Modality { text, audio, image }
 
+/// How an STT model receives audio. This is intentionally separate from
+/// [Capability.stt] so realtime models can be represented without exposing
+/// them through the file-upload pipeline.
+enum SttTransport { batchUpload, asyncJob, realtime }
+
 /// Wire-format families that the runtime knows how to dispatch to.
 enum ApiDialect {
   openaiChat, // POST {baseUrl}/chat/completions
@@ -52,6 +57,9 @@ class ModelSpec {
   final Set<Capability> caps;
   final Set<Modality> inputs; // always contains text
   final List<TtsVoice> voices; // empty unless caps contains tts
+  final SttTransport? sttTransport; // null unless caps contains stt
+  final bool supportsDirectAudioTranslate;
+  final String? batchFallbackModelId;
 
   const ModelSpec({
     required this.id,
@@ -59,10 +67,17 @@ class ModelSpec {
     required this.caps,
     this.inputs = const {Modality.text},
     this.voices = const [],
+    this.sttTransport,
+    this.supportsDirectAudioTranslate = false,
+    this.batchFallbackModelId,
   });
 
   bool supports(Capability c) => caps.contains(c);
   bool acceptsAudio() => inputs.contains(Modality.audio);
+  bool get canTranslateAudioDirect =>
+      supports(Capability.chat) &&
+      acceptsAudio() &&
+      supportsDirectAudioTranslate;
 }
 
 class ProviderSpec {
@@ -136,37 +151,48 @@ const _openAi = ProviderSpec(
       label: 'gpt-audio (text + audio)',
       caps: {Capability.chat},
       inputs: {Modality.text, Modality.audio},
+      supportsDirectAudioTranslate: true,
     ),
     ModelSpec(
       id: 'gpt-audio-mini',
       label: 'gpt-audio-mini (text + audio)',
       caps: {Capability.chat},
       inputs: {Modality.text, Modality.audio},
+      supportsDirectAudioTranslate: true,
     ),
     ModelSpec(
       id: 'gpt-4o-audio-preview',
       label: 'gpt-4o-audio-preview (text + audio)',
       caps: {Capability.chat},
       inputs: {Modality.text, Modality.audio},
+      supportsDirectAudioTranslate: true,
     ),
     ModelSpec(
       id: 'gpt-4o-mini-audio-preview',
       label: 'gpt-4o-mini-audio-preview (text + audio)',
       caps: {Capability.chat},
       inputs: {Modality.text, Modality.audio},
+      supportsDirectAudioTranslate: true,
     ),
     // STT
     ModelSpec(
       id: 'gpt-4o-mini-transcribe',
       label: 'gpt-4o-mini-transcribe',
       caps: {Capability.stt},
+      sttTransport: SttTransport.batchUpload,
     ),
     ModelSpec(
       id: 'gpt-4o-transcribe',
       label: 'gpt-4o-transcribe',
       caps: {Capability.stt},
+      sttTransport: SttTransport.batchUpload,
     ),
-    ModelSpec(id: 'whisper-1', label: 'whisper-1', caps: {Capability.stt}),
+    ModelSpec(
+      id: 'whisper-1',
+      label: 'whisper-1',
+      caps: {Capability.stt},
+      sttTransport: SttTransport.batchUpload,
+    ),
     // TTS
     ModelSpec(
       id: 'gpt-4o-mini-tts',
@@ -240,36 +266,48 @@ const _google = ProviderSpec(
       label: 'gemini-3-flash-preview',
       caps: {Capability.chat, Capability.stt},
       inputs: {Modality.text, Modality.audio},
+      sttTransport: SttTransport.batchUpload,
+      supportsDirectAudioTranslate: true,
     ),
     ModelSpec(
       id: 'gemini-3.1-flash-lite-preview',
       label: 'gemini-3.1-flash-lite-preview',
       caps: {Capability.chat, Capability.stt},
       inputs: {Modality.text, Modality.audio},
+      sttTransport: SttTransport.batchUpload,
+      supportsDirectAudioTranslate: true,
     ),
     ModelSpec(
       id: 'gemini-2.5-pro',
       label: 'gemini-2.5-pro',
       caps: {Capability.chat, Capability.stt},
       inputs: {Modality.text, Modality.audio},
+      sttTransport: SttTransport.batchUpload,
+      supportsDirectAudioTranslate: true,
     ),
     ModelSpec(
       id: 'gemini-2.5-flash',
       label: 'gemini-2.5-flash',
       caps: {Capability.chat, Capability.stt},
       inputs: {Modality.text, Modality.audio},
+      sttTransport: SttTransport.batchUpload,
+      supportsDirectAudioTranslate: true,
     ),
     ModelSpec(
       id: 'gemini-2.0-flash',
       label: 'gemini-2.0-flash',
       caps: {Capability.chat, Capability.stt},
       inputs: {Modality.text, Modality.audio},
+      sttTransport: SttTransport.batchUpload,
+      supportsDirectAudioTranslate: true,
     ),
     ModelSpec(
       id: 'gemini-2.0-flash-lite',
       label: 'gemini-2.0-flash-lite',
       caps: {Capability.chat, Capability.stt},
       inputs: {Modality.text, Modality.audio},
+      sttTransport: SttTransport.batchUpload,
+      supportsDirectAudioTranslate: true,
     ),
     ModelSpec(
       id: 'gemini-3.1-flash-tts-preview',
@@ -632,16 +670,19 @@ const _volcengine = ProviderSpec(
       id: 'volc.bigasr.auc_turbo',
       label: 'volc.bigasr.auc_turbo (急速版)',
       caps: {Capability.stt},
+      sttTransport: SttTransport.batchUpload,
     ),
     ModelSpec(
       id: 'volc.bigasr.auc',
       label: 'volc.bigasr.auc (录音文件 1.0)',
       caps: {Capability.stt},
+      sttTransport: SttTransport.batchUpload,
     ),
     ModelSpec(
       id: 'volc.seedasr.auc',
       label: 'volc.seedasr.auc (录音文件 2.0)',
       caps: {Capability.stt},
+      sttTransport: SttTransport.batchUpload,
     ),
     // TTS (Doubao seed-tts resource ids)
     ModelSpec(
@@ -689,6 +730,7 @@ const _elevenlabs = ProviderSpec(
       id: 'scribe_v2',
       label: 'Scribe v2 (batch)',
       caps: {Capability.stt},
+      sttTransport: SttTransport.batchUpload,
     ),
     // TTS — POST /v1/text-to-speech/{voice_id}.
     ModelSpec(
@@ -744,6 +786,7 @@ const _soniox = ProviderSpec(
       id: 'stt-async-v4',
       label: 'Soniox v4 (async)',
       caps: {Capability.stt},
+      sttTransport: SttTransport.asyncJob,
     ),
   ],
 );

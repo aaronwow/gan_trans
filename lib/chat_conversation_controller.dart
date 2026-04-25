@@ -1,22 +1,22 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import 'chat_turn.dart';
-import 'providers.dart';
 import 'settings.dart';
 import 'stt_service.dart';
 import 'tts_queue.dart';
 import 'tts_service.dart';
+import 'voice_pipeline.dart';
 import 'voice_recorder_controller.dart';
 
 class ChatConversationController extends ChangeNotifier {
   final AppSettings settings;
   final SttService _stt;
   final TtsService _tts;
+  late final VoicePipelineRunner _pipeline;
   late final VoiceRecorderController _recorder;
   final TtsQueue _ttsQueue = TtsQueue();
 
@@ -43,6 +43,7 @@ class ChatConversationController extends ChangeNotifier {
     TtsService? tts,
   }) : _stt = stt ?? SttService(),
        _tts = tts ?? TtsService() {
+    _pipeline = VoicePipelineRunner(settings: settings, stt: _stt, tts: _tts);
     _recorder = VoiceRecorderController(
       onChanged: notifyListeners,
       onAutoCut: () => unawaited(autoCut()),
@@ -196,6 +197,17 @@ class ChatConversationController extends ChangeNotifier {
         turns.contains(t);
   }
 
+  void _recordPipelineResult(ChatTurn t, PipelineResult result) {
+    t.rawTranscript = result.rawTranscript;
+    t.normalizedTranscript = result.normalizedTranscript;
+    t.translatedText = result.translatedText;
+    t.displayText = result.displayText;
+    t.ttsText = result.ttsText;
+    t.providerTrace = result.providerTrace
+        .map((p) => '${p.step.name}:${p.providerName}/${p.modelId}')
+        .toList();
+  }
+
   Future<bool> _runStt(ChatTurn t) async {
     if (t.audioPath == null) return false;
     t.cancelled = false;
@@ -205,18 +217,13 @@ class ChatConversationController extends ChangeNotifier {
     t.lastError = null;
     notifyListeners();
     try {
-      final sttReq = settings.buildSttRequest();
-      if (sttReq == null) {
-        throw StateError('STT is off — pick a provider in Settings.');
-      }
-      final text = await _stt.transcribe(
+      final result = await _pipeline.transcribeAudio(
         filePath: t.audioPath!,
         format: t.audioFormat,
-        request: sttReq,
         client: client,
-        timeout: Duration(seconds: settings.sttTimeoutSeconds),
       );
-      final trimmed = text.trim();
+      _recordPipelineResult(t, result);
+      final trimmed = result.normalizedTranscript ?? result.displayText.trim();
       final path = t.audioPath!;
       unawaited(File(path).delete().catchError((_) => File(path)));
       if (!_turnActive(t)) return false;
@@ -252,57 +259,7 @@ class ChatConversationController extends ChangeNotifier {
     }();
   }
 
-  (String, String)? _parseFusedJson(String reply) {
-    var s = reply.trim();
-    final fence = RegExp(r'^```(?:json)?\s*([\s\S]*?)\s*```$', multiLine: true);
-    final fm = fence.firstMatch(s);
-    if (fm != null) s = fm.group(1)!.trim();
-    final start = s.indexOf('{');
-    final end = s.lastIndexOf('}');
-    if (start < 0 || end <= start) return null;
-    final blob = s.substring(start, end + 1);
-    try {
-      final obj = jsonDecode(blob);
-      if (obj is! Map) return null;
-      final transcript =
-          (obj['transcript'] ??
-                  obj['original'] ??
-                  obj['input'] ??
-                  obj['source'] ??
-                  '')
-              .toString()
-              .trim();
-      final output =
-          (obj['output'] ??
-                  obj['translation'] ??
-                  obj['result'] ??
-                  obj['text'] ??
-                  '')
-              .toString()
-              .trim();
-      if (output.isEmpty && transcript.isEmpty) return null;
-      return (transcript, output.isEmpty ? transcript : output);
-    } catch (_) {
-      return null;
-    }
-  }
-
   Future<void> _runFusedChat(ChatTurn t) async {
-    final req = settings.buildChatRequest();
-    if (req == null) {
-      t.state = TurnState.llmError;
-      t.lastError = StateError('Pick a Chat provider in Settings.');
-      notifyListeners();
-      return;
-    }
-    if (req.apiKey.isEmpty) {
-      t.state = TurnState.llmError;
-      t.lastError = StateError(
-        'Set the ${req.providerName} API key in Settings.',
-      );
-      notifyListeners();
-      return;
-    }
     if (t.audioPath == null) return;
     t.cancelled = false;
     final netClient = http.Client();
@@ -311,50 +268,25 @@ class ChatConversationController extends ChangeNotifier {
     t.lastError = null;
     notifyListeners();
     try {
-      final bytes = await File(t.audioPath!).readAsBytes();
-      final sysPrompt = settings.composedSystemPrompt();
-      final msgs = <ChatMessage>[
-        if (sysPrompt.isNotEmpty) ChatMessage('system', sysPrompt),
-        ChatMessage(
-          'user',
-          '',
-          audio: ChatAudio(bytes: bytes, format: t.audioFormat),
-        ),
-      ];
-      final chat = ChatClient(
-        dialect: req.dialect,
-        baseUrl: req.baseUrl,
-        apiKey: req.apiKey,
-        model: req.modelId,
+      final result = await _pipeline.translateAudioDirect(
+        filePath: t.audioPath!,
+        format: t.audioFormat,
         client: netClient,
-        timeout: Duration(seconds: settings.llmTimeoutSeconds),
       );
-      final reply = await chat.send(msgs);
       final path = t.audioPath!;
       unawaited(File(path).delete().catchError((_) => File(path)));
       if (!_turnActive(t)) return;
-
-      String? transcript;
-      String output = reply;
-      if (settings.audioDirectIncludeTranscript) {
-        final parsed = _parseFusedJson(reply);
-        if (parsed != null) {
-          transcript = parsed.$1;
-          output = parsed.$2;
-        } else {
-          debugPrint('[FusedChat] turn ${t.id} JSON parse failed: $reply');
-        }
-      }
+      _recordPipelineResult(t, result);
 
       t.audioPath = null;
-      t.userText = transcript;
-      t.assistantText = output;
+      t.userText = result.normalizedTranscript;
+      t.assistantText = result.translatedText ?? result.displayText;
       t.state = TurnState.done;
       t.lastError = null;
       notifyListeners();
       onScrollToBottom?.call();
       if (settings.ttsAutoSpeak && settings.ttsProviderId != null) {
-        queueSpeak(output, turnId: t.id);
+        queueSpeak(result.ttsText ?? result.displayText, turnId: t.id);
       }
     } catch (e) {
       debugPrint('[FusedChat] turn ${t.id} failed: $e');
@@ -370,21 +302,6 @@ class ChatConversationController extends ChangeNotifier {
   }
 
   Future<void> _runLlm(ChatTurn t) async {
-    final req = settings.buildChatRequest();
-    if (req == null) {
-      t.state = TurnState.llmError;
-      t.lastError = StateError('Pick a Chat provider in Settings.');
-      notifyListeners();
-      return;
-    }
-    if (req.apiKey.isEmpty) {
-      t.state = TurnState.llmError;
-      t.lastError = StateError(
-        'Set the ${req.providerName} API key in Settings.',
-      );
-      notifyListeners();
-      return;
-    }
     t.cancelled = false;
     final netClient = http.Client();
     t.stopper = netClient;
@@ -392,50 +309,23 @@ class ChatConversationController extends ChangeNotifier {
     t.lastError = null;
     notifyListeners();
     try {
-      final refs = <String>[];
-      final n = settings.historyContextCount;
-      if (n > 0) {
-        for (final other in turns) {
-          if (other.id == t.id) break;
-          final a = other.assistantText?.trim();
-          final u = other.userText?.trim();
-          final pick = (a != null && a.isNotEmpty)
-              ? a
-              : (u != null && u.isNotEmpty ? u : null);
-          if (pick != null) refs.add(pick);
-        }
-      }
-      final recent = refs.length > n ? refs.sublist(refs.length - n) : refs;
-      final sysPrompt = StringBuffer(settings.composedSystemPrompt());
-      if (recent.isNotEmpty) {
-        sysPrompt.write(
-          '\n\n以下是之前的对话内容，仅作为翻译/修正的上下文参考，不要回复、重复或翻译它们，只处理本次用户最新输入：',
-        );
-        for (final r in recent) {
-          sysPrompt.write('\n- $r');
-        }
-      }
-      final msgs = <ChatMessage>[
-        ChatMessage('system', sysPrompt.toString()),
-        ChatMessage('user', t.userText ?? ''),
-      ];
-      final chat = ChatClient(
-        dialect: req.dialect,
-        baseUrl: req.baseUrl,
-        apiKey: req.apiKey,
-        model: req.modelId,
+      final result = await _pipeline.translateText(
+        text: t.userText ?? '',
+        recentContext: _pipeline.recentContextBefore(t, turns),
         client: netClient,
-        timeout: Duration(seconds: settings.llmTimeoutSeconds),
+        strategy: t.typedInput
+            ? PipelineStrategy.textOnlyTranslateThenTts
+            : PipelineStrategy.sttThenTranslateThenTts,
       );
-      final reply = await chat.send(msgs);
       if (!_turnActive(t)) return;
-      t.assistantText = reply;
+      _recordPipelineResult(t, result);
+      t.assistantText = result.translatedText ?? result.displayText;
       t.state = TurnState.done;
       t.lastError = null;
       notifyListeners();
       onScrollToBottom?.call();
       if (settings.ttsAutoSpeak && settings.ttsProviderId != null) {
-        queueSpeak(reply, turnId: t.id);
+        queueSpeak(result.ttsText ?? result.displayText, turnId: t.id);
       }
     } catch (e) {
       debugPrint('[LLM] turn ${t.id} failed: $e');
@@ -457,6 +347,7 @@ class ChatConversationController extends ChangeNotifier {
       id: _nextTurnId++,
       generation: _conversationGeneration,
       audioPath: null,
+      typedInput: true,
     );
     turn.userText = trimmed;
     turn.state = TurnState.waitingLlm;
@@ -513,22 +404,19 @@ class ChatConversationController extends ChangeNotifier {
   }
 
   Future<void> speakText(String text, {int? turnId}) async {
-    final req = settings.buildTtsRequest();
-    if (req == null) return;
     if (turnId != null) {
       speakingTurnId = turnId;
       notifyListeners();
     }
+    final client = http.Client();
     try {
-      await _tts.speak(
-        text: text,
-        request: req,
-        timeout: Duration(seconds: settings.ttsTimeoutSeconds),
-      );
+      await _pipeline.speak(text: text, client: client);
     } catch (e) {
       speakingTurnId = null;
       notifyListeners();
       onMessage?.call('TTS error: $e');
+    } finally {
+      client.close();
     }
   }
 

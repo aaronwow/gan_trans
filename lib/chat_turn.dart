@@ -9,6 +9,12 @@ class ChatTurn {
   final String audioFormat;
   String? userText;
   String? assistantText;
+  String? rawTranscript;
+  String? normalizedTranscript;
+  String? translatedText;
+  String? displayText;
+  String? ttsText;
+  List<String> providerTrace = [];
   TurnState state;
   Object? lastError;
   bool errorExpanded = false;
@@ -18,6 +24,7 @@ class ChatTurn {
   /// True when this turn was sent in audio-direct mode: the recording was
   /// fed straight to the chat model (no STT step). Drives bubble rendering.
   final bool fusedAudio;
+  final bool typedInput;
 
   ChatTurn({
     required this.id,
@@ -25,5 +32,8 @@ class ChatTurn {
     required this.audioPath,
     this.audioFormat = 'wav',
     this.fusedAudio = false,
-  }) : state = fusedAudio ? TurnState.sending : TurnState.transcribing;
+    this.typedInput = false,
+  }) : state = fusedAudio || typedInput
+           ? TurnState.sending
+           : TurnState.transcribing;
 }
