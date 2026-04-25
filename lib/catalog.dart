@@ -220,18 +220,28 @@ const _openRouter = ProviderSpec(
   baseUrl: 'https://openrouter.ai/api/v1',
   dialects: {Capability.chat: ApiDialect.openaiChat},
   credentials: [CredentialField.apiKey],
+  // Curated set of currently popular, non-thinking chat models on OpenRouter.
+  // Reasoning/thinking variants (R1, o-series, grok-*-mini, qwen-*-thinking,
+  // etc.) are intentionally excluded — translation latency matters more than
+  // chain-of-thought quality.
   models: [
+    // DeepSeek
     ModelSpec(
         id: 'deepseek/deepseek-v4-flash',
         label: 'DeepSeek V4 Flash',
         caps: {Capability.chat}),
     ModelSpec(
+        id: 'deepseek/deepseek-v3.2',
+        label: 'DeepSeek V3.2',
+        caps: {Capability.chat}),
+    ModelSpec(
         id: 'deepseek/deepseek-chat',
         label: 'DeepSeek V3 Chat',
         caps: {Capability.chat}),
+    // Anthropic
     ModelSpec(
-        id: 'deepseek/deepseek-r1',
-        label: 'DeepSeek R1',
+        id: 'anthropic/claude-sonnet-4.6',
+        label: 'Claude Sonnet 4.6',
         caps: {Capability.chat}),
     ModelSpec(
         id: 'anthropic/claude-sonnet-4.5',
@@ -241,6 +251,17 @@ const _openRouter = ProviderSpec(
         id: 'anthropic/claude-haiku-4.5',
         label: 'Claude Haiku 4.5',
         caps: {Capability.chat}),
+    // Google
+    ModelSpec(
+        id: 'google/gemini-3-flash-preview',
+        label: 'Gemini 3 Flash Preview',
+        caps: {Capability.chat},
+        inputs: {Modality.text, Modality.audio}),
+    ModelSpec(
+        id: 'google/gemini-3.1-flash-lite-preview',
+        label: 'Gemini 3.1 Flash Lite Preview',
+        caps: {Capability.chat},
+        inputs: {Modality.text, Modality.audio}),
     ModelSpec(
         id: 'google/gemini-2.5-pro',
         label: 'Gemini 2.5 Pro',
@@ -250,6 +271,32 @@ const _openRouter = ProviderSpec(
         label: 'Gemini 2.5 Flash',
         caps: {Capability.chat},
         inputs: {Modality.text, Modality.audio}),
+    ModelSpec(
+        id: 'google/gemini-2.0-flash-001',
+        label: 'Gemini 2.0 Flash',
+        caps: {Capability.chat},
+        inputs: {Modality.text, Modality.audio}),
+    // OpenAI
+    ModelSpec(
+        id: 'openai/gpt-5.4',
+        label: 'GPT-5.4',
+        caps: {Capability.chat}),
+    ModelSpec(
+        id: 'openai/gpt-5.4-mini',
+        label: 'GPT-5.4 Mini',
+        caps: {Capability.chat}),
+    ModelSpec(
+        id: 'openai/gpt-5-chat',
+        label: 'GPT-5 Chat',
+        caps: {Capability.chat}),
+    ModelSpec(
+        id: 'openai/gpt-4.1',
+        label: 'GPT-4.1',
+        caps: {Capability.chat}),
+    ModelSpec(
+        id: 'openai/gpt-4.1-mini',
+        label: 'GPT-4.1 Mini',
+        caps: {Capability.chat}),
     ModelSpec(
         id: 'openai/gpt-4o',
         label: 'GPT-4o',
@@ -273,36 +320,49 @@ const _openRouter = ProviderSpec(
         label: 'GPT-4o audio preview',
         caps: {Capability.chat},
         inputs: {Modality.text, Modality.audio}),
+    // xAI Grok (non-reasoning variants only)
     ModelSpec(
-        id: 'google/gemini-3-flash-preview',
-        label: 'Gemini 3 Flash Preview',
-        caps: {Capability.chat},
-        inputs: {Modality.text, Modality.audio}),
-    ModelSpec(
-        id: 'google/gemini-3.1-flash-lite-preview',
-        label: 'Gemini 3.1 Flash Lite Preview',
-        caps: {Capability.chat},
-        inputs: {Modality.text, Modality.audio}),
-    ModelSpec(
-        id: 'google/gemini-2.0-flash-001',
-        label: 'Gemini 2.0 Flash',
-        caps: {Capability.chat},
-        inputs: {Modality.text, Modality.audio}),
-    ModelSpec(
-        id: 'x-ai/grok-2',
-        label: 'Grok 2',
+        id: 'x-ai/grok-4.1-fast',
+        label: 'Grok 4.1 Fast',
         caps: {Capability.chat}),
     ModelSpec(
-        id: 'qwen/qwen-2.5-72b-instruct',
-        label: 'Qwen 2.5 72B Instruct',
+        id: 'x-ai/grok-4-fast',
+        label: 'Grok 4 Fast',
+        caps: {Capability.chat}),
+    ModelSpec(
+        id: 'x-ai/grok-3',
+        label: 'Grok 3',
+        caps: {Capability.chat}),
+    // Meta Llama
+    ModelSpec(
+        id: 'meta-llama/llama-4-maverick',
+        label: 'Llama 4 Maverick',
+        caps: {Capability.chat}),
+    ModelSpec(
+        id: 'meta-llama/llama-4-scout',
+        label: 'Llama 4 Scout',
         caps: {Capability.chat}),
     ModelSpec(
         id: 'meta-llama/llama-3.3-70b-instruct',
         label: 'Llama 3.3 70B Instruct',
         caps: {Capability.chat}),
+    // Qwen (Instruct / non-thinking)
     ModelSpec(
-        id: 'mistralai/mistral-large',
-        label: 'Mistral Large',
+        id: 'qwen/qwen3-max',
+        label: 'Qwen3 Max',
+        caps: {Capability.chat}),
+    ModelSpec(
+        id: 'qwen/qwen3-235b-a22b-2507',
+        label: 'Qwen3 235B A22B Instruct 2507',
+        caps: {Capability.chat}),
+    // Mistral
+    ModelSpec(
+        id: 'mistralai/mistral-large-2512',
+        label: 'Mistral Large 3 (2512)',
+        caps: {Capability.chat}),
+    ModelSpec(
+        id: 'mistralai/mistral-medium-3.1',
+        label: 'Mistral Medium 3.1',
         caps: {Capability.chat}),
   ],
 );

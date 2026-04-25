@@ -120,6 +120,10 @@ class ChatConversationController extends ChangeNotifier {
       continuousLoopActive = false;
     }
     notifyListeners();
+    // Settings edits (provider/model/audio-direct) can clear a guard that was
+    // blocking a previous resume attempt — retry now so half-duplex doesn't
+    // wedge in "Resuming…" when voiceInputAvailable flips back to true.
+    maybeResumeHalfDuplex();
   }
 
   Future<void> startListening() async {
@@ -145,6 +149,10 @@ class ChatConversationController extends ChangeNotifier {
     } finally {
       autoRestarting = false;
       notifyListeners();
+      // If autoCut hit a recorded==null path (sub-min-record), the inner
+      // maybeResumeHalfDuplex was blocked by autoRestarting=true. Retry now
+      // that the flag is cleared so half-duplex doesn't stall.
+      maybeResumeHalfDuplex();
     }
   }
 
