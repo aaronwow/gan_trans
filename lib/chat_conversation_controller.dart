@@ -158,6 +158,16 @@ class ChatConversationController extends ChangeNotifier {
     }
   }
 
+  /// Discard the current push-to-talk recording without sending. Used by the
+  /// swipe-up-to-cancel gesture: the user is mid-press, drags up past the
+  /// cancel threshold, and lifts. The buffered audio file is deleted and no
+  /// turn is created.
+  Future<void> cancelHoldToTalk() async {
+    if (!listening) return;
+    await _recorder.cancelAndDelete();
+    notifyListeners();
+  }
+
   Future<void> cutAndProcess() async {
     if (!listening) return;
     final recorded = await _recorder.stop(

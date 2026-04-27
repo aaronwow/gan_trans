@@ -305,7 +305,12 @@ class _DuplexFilter extends StatelessWidget {
   }
 }
 
-class _MicBar extends StatelessWidget {
+/// Vertical drag distance (logical pixels, upward) at which a hold-to-talk
+/// press becomes "armed to cancel". Once armed, releasing discards the
+/// recording instead of sending it.
+const double _kMicCancelThreshold = 60.0;
+
+class _MicBar extends StatefulWidget {
   final bool listening;
   final bool enabled;
   final bool continuous;
@@ -315,6 +320,8 @@ class _MicBar extends StatelessWidget {
   final VoidCallback? onGearTap;
   final VoidCallback? onPressStart;
   final VoidCallback? onPressEnd;
+  final VoidCallback? onCancel;
+  final ValueChanged<bool>? onCancelArmedChanged;
   final VoidCallback? onTap;
 
   const _MicBar({
@@ -327,23 +334,56 @@ class _MicBar extends StatelessWidget {
     this.onGearTap,
     this.onPressStart,
     this.onPressEnd,
+    this.onCancel,
+    this.onCancelArmedChanged,
     this.onTap,
   });
 
   @override
+  State<_MicBar> createState() => _MicBarState();
+}
+
+class _MicBarState extends State<_MicBar> {
+  Offset? _downGlobal;
+  bool _armed = false;
+  bool _pressed = false;
+
+  void _setArmed(bool v) {
+    if (_armed == v) return;
+    _armed = v;
+    widget.onCancelArmedChanged?.call(v);
+  }
+
+  void _resetPress() {
+    _downGlobal = null;
+    _pressed = false;
+    _setArmed(false);
+  }
+
+  @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final base = listening ? Colors.redAccent : cs.primary;
-    final disabled = !enabled;
-    final label = listening
-        ? (continuous ? 'Listening — tap to stop' : 'Release to send')
-        : (continuous ? 'Tap to start' : 'Hold to talk');
-    final icon = listening ? Icons.graphic_eq : Icons.mic;
+    final disabled = !widget.enabled;
+    final base = _armed
+        ? Colors.red.shade700
+        : (widget.listening ? Colors.redAccent : cs.primary);
+    final label = _armed
+        ? '松开取消'
+        : (widget.listening
+              ? (widget.continuous
+                    ? 'Listening — tap to stop'
+                    : 'Release to send')
+              : (widget.continuous ? 'Tap to start' : 'Hold to talk'));
+    final icon = _armed
+        ? Icons.delete_outline
+        : (widget.listening ? Icons.graphic_eq : Icons.mic);
 
     final bar = AnimatedBuilder(
-      animation: pulse,
+      animation: widget.pulse,
       builder: (_, _) {
-        final glow = listening ? (0.25 + pulse.value * 0.25) : 0.18;
+        final glow = widget.listening
+            ? (0.25 + widget.pulse.value * 0.25)
+            : 0.18;
         return Container(
           height: 56,
           decoration: BoxDecoration(
@@ -358,7 +398,7 @@ class _MicBar extends StatelessWidget {
             boxShadow: [
               BoxShadow(
                 color: base.withValues(alpha: glow),
-                blurRadius: listening ? 22 : 14,
+                blurRadius: widget.listening ? 22 : 14,
                 offset: const Offset(0, 6),
               ),
             ],
@@ -379,10 +419,10 @@ class _MicBar extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
-              if (showGear) ...[
+              if (widget.showGear) ...[
                 const SizedBox(width: 8),
                 InkWell(
-                  onTap: onGearTap,
+                  onTap: widget.onGearTap,
                   customBorder: const CircleBorder(),
                   child: Container(
                     width: 34,
@@ -405,11 +445,44 @@ class _MicBar extends StatelessWidget {
       },
     );
 
-    return GestureDetector(
-      onTapDown: disabled || continuous ? null : (_) => onPressStart?.call(),
-      onTapUp: disabled || continuous ? null : (_) => onPressEnd?.call(),
-      onTapCancel: disabled || continuous ? null : () => onPressEnd?.call(),
-      onTap: disabled || !continuous ? null : onTap,
+    if (disabled) return bar;
+
+    if (widget.continuous) {
+      // Continuous mode: a single tap toggles listening; no swipe-cancel.
+      return GestureDetector(onTap: widget.onTap, child: bar);
+    }
+
+    // Push-to-talk mode: use a Listener so we own the pointer regardless of
+    // gesture-arena competition with ancestor scrollables. Track Y delta to
+    // detect a cancel-arming swipe upward.
+    return Listener(
+      onPointerDown: (e) {
+        _downGlobal = e.position;
+        _pressed = true;
+        _setArmed(false);
+        widget.onPressStart?.call();
+      },
+      onPointerMove: (e) {
+        if (!_pressed || _downGlobal == null) return;
+        final dy = _downGlobal!.dy - e.position.dy; // upward = positive
+        _setArmed(dy >= _kMicCancelThreshold);
+        if (_armed) setState(() {}); // refresh label/colour live
+      },
+      onPointerUp: (_) {
+        if (!_pressed) return;
+        final wasArmed = _armed;
+        _resetPress();
+        if (wasArmed) {
+          widget.onCancel?.call();
+        } else {
+          widget.onPressEnd?.call();
+        }
+      },
+      onPointerCancel: (_) {
+        if (!_pressed) return;
+        _resetPress();
+        widget.onPressEnd?.call();
+      },
       child: bar,
     );
   }

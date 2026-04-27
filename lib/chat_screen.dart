@@ -29,6 +29,7 @@ class _ChatScreenState extends State<ChatScreen>
 
   late final ChatConversationController _chat;
   late final AnimationController _pulse;
+  bool _cancelArmed = false;
 
   @override
   void initState() {
@@ -1467,9 +1468,30 @@ class _ChatScreenState extends State<ChatScreen>
         onGearTap: _openVadQuickAdjust,
         onPressStart: isContinuous ? null : _chat.startListening,
         onPressEnd: isContinuous ? null : _chat.cutAndProcess,
+        onCancel: isContinuous ? null : _chat.cancelHoldToTalk,
+        onCancelArmedChanged: isContinuous
+            ? null
+            : (v) {
+                if (_cancelArmed == v) return;
+                setState(() => _cancelArmed = v);
+              },
         onTap: isContinuous ? _chat.toggleContinuousListening : null,
       ),
     );
+
+    final statusLine = _cancelArmed
+        ? Text(
+            '上滑已激活：松开即可取消发送',
+            style: TextStyle(
+              color: cs.error,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          )
+        : Text(
+            status,
+            style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12),
+          );
 
     return SafeArea(
       top: false,
@@ -1493,10 +1515,7 @@ class _ChatScreenState extends State<ChatScreen>
               ),
             Padding(
               padding: const EdgeInsets.only(bottom: 6),
-              child: Text(
-                status,
-                style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12),
-              ),
+              child: statusLine,
             ),
             Row(
               children: isContinuous
