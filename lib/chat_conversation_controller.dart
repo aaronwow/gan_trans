@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import 'chat_turn.dart';
+import 'providers.dart';
 import 'settings.dart';
 import 'stt_service.dart';
 import 'tts_queue.dart';
@@ -340,6 +341,54 @@ class ChatConversationController extends ChangeNotifier {
     }
   }
 
+  void sendImage(ChatImage image) {
+    final turn = ChatTurn(
+      id: _nextTurnId++,
+      generation: _conversationGeneration,
+      audioPath: null,
+      image: image,
+    );
+    turn.userText = '';
+    turns.add(turn);
+    notifyListeners();
+    onScrollToBottom?.call();
+    unawaited(_runImageChat(turn));
+  }
+
+  Future<void> _runImageChat(ChatTurn t) async {
+    final image = t.image;
+    if (image == null) return;
+    t.cancelled = false;
+    final netClient = http.Client();
+    t.stopper = netClient;
+    t.state = TurnState.sending;
+    t.lastError = null;
+    notifyListeners();
+    try {
+      final result = await _pipeline.translateImage(
+        image: image,
+        client: netClient,
+      );
+      if (!_turnActive(t)) return;
+      _recordPipelineResult(t, result);
+      t.assistantText = result.translatedText ?? result.displayText;
+      t.state = TurnState.done;
+      t.lastError = null;
+      notifyListeners();
+      onScrollToBottom?.call();
+      // Image input never auto-speaks: per-spec it does not engage TTS.
+    } catch (e) {
+      debugPrint('[ImageChat] turn ${t.id} failed: $e');
+      if (t.cancelled) return;
+      t.state = TurnState.llmError;
+      t.lastError = e;
+      notifyListeners();
+    } finally {
+      t.stopper = null;
+      netClient.close();
+    }
+  }
+
   void sendTypedText(String text) {
     final trimmed = text.trim();
     if (trimmed.isEmpty) return;
@@ -375,6 +424,10 @@ class ChatConversationController extends ChangeNotifier {
   }
 
   Future<void> retryTurn(ChatTurn t) async {
+    if (t.imageInput) {
+      await _runImageChat(t);
+      return;
+    }
     if (t.fusedAudio && t.audioPath != null) {
       await _runFusedChat(t);
       return;

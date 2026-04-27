@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 
 import 'chat_turn.dart';
+import 'prompt_composer.dart';
 import 'providers.dart';
 import 'settings.dart';
 import 'stt_service.dart';
@@ -13,6 +14,7 @@ enum PipelineStrategy {
   sttThenTranslateThenTts,
   audioDirectTranslateThenTts,
   textOnlyTranslateThenTts,
+  imageOcrAndTranslate,
 }
 
 enum PipelineStepKind { stt, translate, tts }
@@ -319,6 +321,107 @@ class DirectAudioTranslateStep
   }
 }
 
+class ImageTranslateInput {
+  final ChatImage image;
+
+  const ImageTranslateInput({required this.image});
+}
+
+class ImageTranslateStep
+    implements PipelineStep<ImageTranslateInput, PipelineResult> {
+  @override
+  PipelineStepKind get kind => PipelineStepKind.translate;
+
+  @override
+  Future<PipelineResult> run(
+    ImageTranslateInput input,
+    PipelineContext context,
+  ) async {
+    final s = context.settings;
+    final req = s.buildImageChatRequest();
+    if (req == null) {
+      throw const PipelineError(
+        step: PipelineStepKind.translate,
+        userMessage: 'Pick a Chat provider in Settings.',
+        debugMessage: 'No image chat request could be built from settings.',
+        retryable: false,
+      );
+    }
+    if (req.apiKey.isEmpty) {
+      throw PipelineError(
+        step: PipelineStepKind.translate,
+        providerId: req.providerName,
+        modelId: req.modelId,
+        userMessage: 'Set the ${req.providerName} API key in Settings.',
+        debugMessage: 'Missing API key for ${req.providerName}.',
+        retryable: false,
+      );
+    }
+    final sysPrompt = PromptComposer.compose(
+      PromptOptions(
+        intent: PromptIntent.imageOcrAndTranslate,
+        translationEnabled: s.translationEnabled || s.correctionEnabled,
+        translationLangA: s.translationLangA,
+        translationLangB: s.translationLangB,
+        scenePrompt: s.activeScene.prompt,
+        includeScenePrompt: s.includeScenePrompt,
+      ),
+    );
+    final chat = ChatClient(
+      dialect: req.dialect,
+      baseUrl: req.baseUrl,
+      apiKey: req.apiKey,
+      model: req.modelId,
+      client: context.client,
+      timeout: Duration(seconds: s.llmTimeoutSeconds),
+    );
+    try {
+      final reply = await chat.send([
+        ChatMessage('system', sysPrompt),
+        ChatMessage('user', '', image: input.image),
+      ]);
+      final parts = _splitImageOcrReply(reply);
+      final original = parts.$1;
+      final output = parts.$2;
+      return PipelineResult(
+        strategy: PipelineStrategy.imageOcrAndTranslate,
+        rawTranscript: original,
+        normalizedTranscript: original?.trim(),
+        translatedText: output,
+        displayText: output,
+        ttsText: output,
+        providerTrace: [
+          PipelineTrace(
+            step: PipelineStepKind.translate,
+            providerName: req.providerName,
+            modelId: req.modelId,
+          ),
+        ],
+      );
+    } catch (e) {
+      if (e is PipelineError) rethrow;
+      throw PipelineError(
+        step: PipelineStepKind.translate,
+        providerId: req.providerName,
+        modelId: req.modelId,
+        userMessage: 'Image translation failed: $e',
+        debugMessage: e.toString(),
+      );
+    }
+  }
+}
+
+/// Splits the model reply on [kImageOcrSeparator]. Returns (original, output).
+/// If the separator isn't found, the whole reply is returned as the output and
+/// the original is null — the UI then just shows the raw reply.
+(String?, String) _splitImageOcrReply(String reply) {
+  final idx = reply.indexOf(kImageOcrSeparator);
+  if (idx < 0) return (null, reply.trim());
+  final before = reply.substring(0, idx).trim();
+  final after = reply.substring(idx + kImageOcrSeparator.length).trim();
+  return (before.isEmpty ? null : before, after);
+}
+
 class TtsPipelineStep implements PipelineStep<String, void> {
   final TtsService service;
 
@@ -359,6 +462,7 @@ class VoicePipelineRunner {
   final SttPipelineStep sttStep;
   final TextTranslateStep textTranslateStep;
   final DirectAudioTranslateStep directAudioTranslateStep;
+  final ImageTranslateStep imageTranslateStep;
   final TtsPipelineStep ttsStep;
 
   VoicePipelineRunner({
@@ -368,6 +472,7 @@ class VoicePipelineRunner {
   }) : sttStep = SttPipelineStep(stt),
        textTranslateStep = TextTranslateStep(),
        directAudioTranslateStep = DirectAudioTranslateStep(),
+       imageTranslateStep = ImageTranslateStep(),
        ttsStep = TtsPipelineStep(tts);
 
   Future<PipelineResult> transcribeAudio({
@@ -404,6 +509,16 @@ class VoicePipelineRunner {
   }) {
     return directAudioTranslateStep.run(
       DirectAudioTranslateInput(filePath: filePath, format: format),
+      PipelineContext(settings: settings, client: client),
+    );
+  }
+
+  Future<PipelineResult> translateImage({
+    required ChatImage image,
+    required http.Client client,
+  }) {
+    return imageTranslateStep.run(
+      ImageTranslateInput(image: image),
       PipelineContext(settings: settings, client: client),
     );
   }

@@ -8,6 +8,10 @@
 	<string>This app uses the microphone for voice input to chat messages.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>This app uses speech recognition to convert your voice into chat messages.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>This app uses the camera to capture images for translation.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>This app needs access to your photo library to attach images for translation.</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>

@@ -2,10 +2,12 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
 import 'catalog.dart';
 import 'chat_conversation_controller.dart';
 import 'chat_turn.dart';
 import 'main.dart';
+import 'providers.dart';
 import 'scenes_screen.dart';
 import 'settings.dart';
 import 'settings_screen.dart';
@@ -85,6 +87,258 @@ class _ChatScreenState extends State<ChatScreen>
     if (text.isEmpty) return;
     _textInput.clear();
     _chat.sendTypedText(text);
+  }
+
+  final ImagePicker _imagePicker = ImagePicker();
+
+  Future<void> _pickAndSendImage(ImageSource source) async {
+    try {
+      final picked = await _imagePicker.pickImage(
+        source: source,
+        maxWidth: 2048,
+        maxHeight: 2048,
+        imageQuality: 88,
+      );
+      if (picked == null) return;
+      final bytes = await picked.readAsBytes();
+      final format = _detectImageFormat(picked.name, bytes);
+      _chat.sendImage(ChatImage(bytes: bytes, format: format));
+    } catch (e) {
+      if (!mounted) return;
+      _showSnack('Image error: $e');
+    }
+  }
+
+  String _detectImageFormat(String name, Uint8List bytes) {
+    final lower = name.toLowerCase();
+    if (lower.endsWith('.png')) return 'png';
+    if (lower.endsWith('.webp')) return 'webp';
+    if (lower.endsWith('.gif')) return 'gif';
+    if (lower.endsWith('.heic')) return 'heic';
+    if (lower.endsWith('.heif')) return 'heif';
+    if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'jpg';
+    // Fall back to magic-byte sniffing for picker-supplied paths without ext.
+    if (bytes.length >= 8 &&
+        bytes[0] == 0x89 &&
+        bytes[1] == 0x50 &&
+        bytes[2] == 0x4E &&
+        bytes[3] == 0x47) {
+      return 'png';
+    }
+    if (bytes.length >= 12 &&
+        bytes[0] == 0x52 &&
+        bytes[1] == 0x49 &&
+        bytes[8] == 0x57 &&
+        bytes[9] == 0x45) {
+      return 'webp';
+    }
+    return 'jpg';
+  }
+
+  Future<void> _openImageSheet() async {
+    final s = widget.settings;
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (ctx) {
+        final cs = Theme.of(ctx).colorScheme;
+        return StatefulBuilder(
+          builder: (ctx, setSheet) {
+            final imageProviders = s.imageProviders().toList();
+            final effectivePid = s.effectiveImageProviderId;
+            final effectiveMid = s.effectiveImageModelId;
+            final overrideOn = s.imageProviderId != null;
+            final canSend = s.imageInputAvailable;
+            return SafeArea(
+              top: false,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(Icons.image_outlined, color: cs.primary),
+                        const SizedBox(width: 8),
+                        Text(
+                          '图片翻译',
+                          style: Theme.of(ctx).textTheme.titleMedium,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      '提取图片中的文字并按 ${s.translationLangA} ↔ ${s.translationLangB} 翻译。',
+                      style: TextStyle(
+                        color: cs.onSurfaceVariant,
+                        fontSize: 12,
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    Text('使用模型', style: Theme.of(ctx).textTheme.labelLarge),
+                    const SizedBox(height: 6),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      dense: true,
+                      title: const Text('指定单独的图片模型'),
+                      subtitle: Text(
+                        overrideOn
+                            ? '已开启（不使用对话模型）'
+                            : '关闭：跟随当前对话模型 (${s.chatModelId.isEmpty ? "未设置" : s.chatModelId})',
+                        style: TextStyle(color: cs.onSurfaceVariant),
+                      ),
+                      value: overrideOn,
+                      onChanged: (v) async {
+                        if (v) {
+                          // Default to first image-capable provider if any.
+                          final firstPid = imageProviders.isEmpty
+                              ? null
+                              : imageProviders.first.id;
+                          if (firstPid == null) {
+                            setSheet(() {});
+                            return;
+                          }
+                          await s.setImageProvider(firstPid);
+                        } else {
+                          await s.setImageProvider(null);
+                        }
+                        setSheet(() {});
+                        if (mounted) setState(() {});
+                      },
+                    ),
+                    if (overrideOn) ...[
+                      DropdownButtonFormField<String>(
+                        initialValue: s.imageProviderId,
+                        isExpanded: true,
+                        decoration: const InputDecoration(
+                          labelText: '提供商',
+                          isDense: true,
+                        ),
+                        items: imageProviders
+                            .map(
+                              (p) => DropdownMenuItem(
+                                value: p.id,
+                                child: Text(p.name),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (v) async {
+                          if (v == null) return;
+                          await s.setImageProvider(v);
+                          setSheet(() {});
+                          if (mounted) setState(() {});
+                        },
+                      ),
+                      const SizedBox(height: 10),
+                      Builder(
+                        builder: (_) {
+                          final pid = s.imageProviderId;
+                          final provider = pid == null
+                              ? null
+                              : findProvider(pid);
+                          final models = provider == null
+                              ? const <ModelSpec>[]
+                              : provider
+                                    .modelsFor(Capability.chat)
+                                    .where((m) => m.acceptsImage())
+                                    .toList();
+                          return DropdownButtonFormField<String>(
+                            initialValue:
+                                models.any((m) => m.id == s.imageModelId)
+                                ? s.imageModelId
+                                : (models.isEmpty ? null : models.first.id),
+                            isExpanded: true,
+                            decoration: const InputDecoration(
+                              labelText: '模型',
+                              isDense: true,
+                            ),
+                            items: models
+                                .map(
+                                  (m) => DropdownMenuItem(
+                                    value: m.id,
+                                    child: Text(m.label),
+                                  ),
+                                )
+                                .toList(),
+                            onChanged: (v) async {
+                              if (v == null) return;
+                              await s.setImageModel(v);
+                              setSheet(() {});
+                              if (mounted) setState(() {});
+                            },
+                          );
+                        },
+                      ),
+                    ],
+                    const SizedBox(height: 4),
+                    if (!canSend)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 6, bottom: 4),
+                        child: Text(
+                          overrideOn
+                              ? '请选择一个支持图片输入的模型。'
+                              : '当前对话模型不支持图片输入，请打开上面的开关挑选支持视觉的模型。',
+                          style: TextStyle(
+                            color: cs.error,
+                            fontSize: 12,
+                          ),
+                        ),
+                      )
+                    else
+                      Padding(
+                        padding: const EdgeInsets.only(top: 6, bottom: 4),
+                        child: Text(
+                          '将使用 $effectivePid · $effectiveMid',
+                          style: TextStyle(
+                            color: cs.onSurfaceVariant,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: FilledButton.icon(
+                            onPressed: canSend
+                                ? () async {
+                                    Navigator.of(ctx).pop();
+                                    await _pickAndSendImage(
+                                      ImageSource.camera,
+                                    );
+                                  }
+                                : null,
+                            icon: const Icon(Icons.photo_camera_outlined),
+                            label: const Text('拍照'),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: FilledButton.tonalIcon(
+                            onPressed: canSend
+                                ? () async {
+                                    Navigator.of(ctx).pop();
+                                    await _pickAndSendImage(
+                                      ImageSource.gallery,
+                                    );
+                                  }
+                                : null,
+                            icon: const Icon(Icons.photo_library_outlined),
+                            label: const Text('从相册'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
   }
 
   void _scrollToBottom() {
@@ -245,6 +499,11 @@ class _ChatScreenState extends State<ChatScreen>
                   label: s.activeScene.name,
                   onTap: _openScenes,
                 ),
+              ),
+              const SizedBox(width: 8),
+              _IconPill(
+                icon: Icons.image_outlined,
+                onTap: _openImageSheet,
               ),
               const SizedBox(width: 8),
               _IconPill(icon: Icons.tune, onTap: _openConfigSheet),
@@ -838,7 +1097,8 @@ class _ChatScreenState extends State<ChatScreen>
     final widgets = <Widget>[_userBubble(t)];
     final hasUserText = t.userText != null && t.userText!.isNotEmpty;
     final showAssistant =
-        (hasUserText || t.fusedAudio) && t.state != TurnState.sttError;
+        (hasUserText || t.fusedAudio || t.imageInput) &&
+        t.state != TurnState.sttError;
     if (showAssistant) widgets.add(_assistantBubble(t));
     return widgets;
   }
@@ -913,6 +1173,16 @@ class _ChatScreenState extends State<ChatScreen>
           const SizedBox(width: 6),
           Text('Audio', style: TextStyle(color: cs.onPrimary, height: 1.35)),
         ],
+      );
+    } else if (t.imageInput) {
+      content = ClipRRect(
+        borderRadius: BorderRadius.circular(10),
+        child: Image.memory(
+          t.image!.bytes,
+          width: 200,
+          fit: BoxFit.cover,
+          gaplessPlayback: true,
+        ),
       );
     } else {
       content = GestureDetector(
@@ -1010,6 +1280,67 @@ class _ChatScreenState extends State<ChatScreen>
             child: Padding(
               padding: const EdgeInsets.all(4),
               child: Icon(Icons.refresh, size: 18, color: cs.onErrorContainer),
+            ),
+          ),
+        ],
+      );
+    } else if (t.imageInput) {
+      // For image turns we render two sections: 原文 (extracted) and 译文.
+      // The model is asked to emit a stable separator; if it's missing we fall
+      // back to a single block so the user still sees the raw reply.
+      final original = t.normalizedTranscript ?? t.rawTranscript;
+      final output = t.translatedText ?? text ?? '';
+      final originalIsRich =
+          original != null && original.trim().isNotEmpty;
+      content = Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (originalIsRich) ...[
+            Text(
+              '原文',
+              style: TextStyle(
+                color: cs.onSurfaceVariant,
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 0.4,
+              ),
+            ),
+            const SizedBox(height: 4),
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => _copyMessage(original),
+              onLongPress: () => _copyMessage(original),
+              child: Text(
+                original,
+                style: TextStyle(color: cs.onSurface, height: 1.35),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Divider(
+                height: 1,
+                color: cs.outlineVariant.withValues(alpha: 0.6),
+              ),
+            ),
+            Text(
+              '译文',
+              style: TextStyle(
+                color: cs.onSurfaceVariant,
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 0.4,
+              ),
+            ),
+            const SizedBox(height: 4),
+          ],
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => _copyMessage(output),
+            onLongPress: () => _copyMessage(output),
+            child: Text(
+              output,
+              style: TextStyle(color: cs.onSurface, height: 1.35),
             ),
           ),
         ],

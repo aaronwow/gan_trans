@@ -1,5 +1,7 @@
 import 'package:http/http.dart' as http;
 
+import 'providers.dart';
+
 enum TurnState { transcribing, sttError, waitingLlm, sending, llmError, done }
 
 class ChatTurn {
@@ -26,6 +28,12 @@ class ChatTurn {
   final bool fusedAudio;
   final bool typedInput;
 
+  /// Optional image attachment for this turn (image OCR + translate flow).
+  /// Kept on the turn so it can be shown in the user bubble and re-sent on
+  /// retry without re-prompting the picker.
+  final ChatImage? image;
+  bool get imageInput => image != null;
+
   ChatTurn({
     required this.id,
     required this.generation,
@@ -33,7 +41,8 @@ class ChatTurn {
     this.audioFormat = 'wav',
     this.fusedAudio = false,
     this.typedInput = false,
-  }) : state = fusedAudio || typedInput
+    this.image,
+  }) : state = fusedAudio || typedInput || image != null
            ? TurnState.sending
            : TurnState.transcribing;
 }

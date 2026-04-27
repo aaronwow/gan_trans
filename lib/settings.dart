@@ -47,6 +47,10 @@ class AppSettings extends ChangeNotifier {
   static const _kTtsModelId = 'tts_model_id';
   static const _kLastTtsProviderId = 'last_tts_provider_id';
   static const _kTtsVoice = 'tts_voice';
+  // Image translation routing. Null/empty means: fall back to the chat model
+  // (only valid when that model itself accepts image input).
+  static const _kImageProviderId = 'image_provider_id';
+  static const _kImageModelId = 'image_model_id';
   static const _kTtsAutoSpeak = 'tts_auto_speak';
   static const _kTtsVolcSpeechRate = 'tts_volc_speech_rate';
 
@@ -123,6 +127,10 @@ class AppSettings extends ChangeNotifier {
   String ttsVoice = '';
   bool ttsAutoSpeak = true;
   int ttsVolcSpeechRate = 0;
+  /// Optional override for image input requests. When null, image messages go
+  /// to the chat model (which must itself accept images).
+  String? imageProviderId;
+  String imageModelId = '';
 
   // ---- Other settings ----
   VoiceMode voiceMode = VoiceMode.pushToTalk;
@@ -243,6 +251,11 @@ class AppSettings extends ChangeNotifier {
 
     ttsAutoSpeak = p.getBool(_kTtsAutoSpeak) ?? true;
     ttsVolcSpeechRate = p.getInt(_kTtsVolcSpeechRate) ?? 0;
+
+    final imgPid = p.getString(_kImageProviderId);
+    imageProviderId = (imgPid == null || imgPid.isEmpty) ? null : imgPid;
+    imageModelId = p.getString(_kImageModelId) ?? '';
+    _ensureImageValid();
 
     voiceMode = _voiceModeFromIndex(p.getInt(_kVoiceMode));
 
@@ -474,6 +487,33 @@ class AppSettings extends ChangeNotifier {
     }
   }
 
+  void _ensureImageValid() {
+    final pid = imageProviderId;
+    if (pid == null) return;
+    final provider = findProvider(pid);
+    final model = provider?.findModel(imageModelId);
+    if (model == null ||
+        !model.supports(Capability.chat) ||
+        !model.acceptsImage()) {
+      final fallback = _firstImageModelId(pid);
+      if (fallback == null) {
+        imageProviderId = null;
+        imageModelId = '';
+      } else {
+        imageModelId = fallback;
+      }
+    }
+  }
+
+  String? _firstImageModelId(String providerId) {
+    final p = findProvider(providerId);
+    if (p == null) return null;
+    for (final m in p.modelsFor(Capability.chat)) {
+      if (m.acceptsImage()) return m.id;
+    }
+    return null;
+  }
+
   // ---- Setters ----
 
   Future<void> setCredential(
@@ -500,6 +540,64 @@ class AppSettings extends ChangeNotifier {
     chatModelId = modelId;
     await (await _prefs).setString(_kChatModel, modelId);
     notifyListeners();
+  }
+
+  Future<void> setImageProvider(String? providerId) async {
+    imageProviderId = providerId;
+    final p = await _prefs;
+    await p.setString(_kImageProviderId, providerId ?? '');
+    if (providerId != null) {
+      imageModelId = _firstImageModelId(providerId) ?? '';
+      await p.setString(_kImageModelId, imageModelId);
+    } else {
+      imageModelId = '';
+      await p.setString(_kImageModelId, '');
+    }
+    notifyListeners();
+  }
+
+  Future<void> setImageModel(String modelId) async {
+    imageModelId = modelId;
+    await (await _prefs).setString(_kImageModelId, modelId);
+    notifyListeners();
+  }
+
+  /// Providers that have at least one chat model accepting images.
+  Iterable<ProviderSpec> imageProviders() => kCatalog.where(
+    (p) =>
+        p.dialects.containsKey(Capability.chat) &&
+        p.modelsFor(Capability.chat).any((m) => m.acceptsImage()),
+  );
+
+  /// Effective provider for an image request: explicit override if set,
+  /// otherwise the chat provider (only valid when its model accepts images).
+  String? get effectiveImageProviderId => imageProviderId ?? chatProviderId;
+  String get effectiveImageModelId =>
+      imageProviderId != null ? imageModelId : chatModelId;
+
+  bool get imageInputAvailable {
+    final pid = effectiveImageProviderId;
+    if (pid == null) return false;
+    final m = findProvider(pid)?.findModel(effectiveImageModelId);
+    return m?.acceptsImage() ?? false;
+  }
+
+  /// Like [buildChatRequest] but routed through [effectiveImageProviderId].
+  ChatRequest? buildImageChatRequest() {
+    final pid = effectiveImageProviderId;
+    if (pid == null) return null;
+    final provider = findProvider(pid);
+    if (provider == null) return null;
+    final dialect = provider.dialects[Capability.chat];
+    if (dialect == null) return null;
+    final apiKey = credential(pid, CredentialField.apiKey);
+    return ChatRequest(
+      providerName: provider.name,
+      dialect: dialect,
+      baseUrl: provider.baseUrl,
+      apiKey: apiKey,
+      modelId: effectiveImageModelId,
+    );
   }
 
   Future<void> setSttProvider(String? providerId) async {

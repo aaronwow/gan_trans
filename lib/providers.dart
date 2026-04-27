@@ -1,4 +1,6 @@
 import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:http/http.dart' as http;
 
 import 'catalog.dart';
@@ -30,11 +32,48 @@ class ChatAudio {
   }
 }
 
+/// Optional image attachment on a [ChatMessage] (user role only). The runtime
+/// re-encodes this into the dialect-specific request shape (Gemini's
+/// `inline_data` part, OpenAI's `image_url` content block with a data URL).
+///
+/// [bytes] is stored as a stable `Uint8List` so widgets can pass the same
+/// instance to `Image.memory` across rebuilds — Flutter's image cache keys on
+/// the byte buffer's identity, so re-wrapping with `Uint8List.fromList(...)`
+/// on every build forces a re-decode and visible flicker (notably during
+/// push-to-talk's high-frequency sound-level rebuilds).
+class ChatImage {
+  final Uint8List bytes;
+  /// Lowercase image format hint, e.g. 'png', 'jpg', 'webp'. Used to derive a
+  /// MIME type when one isn't supplied directly by the picker.
+  final String format;
+  const ChatImage({required this.bytes, required this.format});
+
+  String get mimeType {
+    switch (format.toLowerCase()) {
+      case 'png':
+        return 'image/png';
+      case 'webp':
+        return 'image/webp';
+      case 'gif':
+        return 'image/gif';
+      case 'heic':
+        return 'image/heic';
+      case 'heif':
+        return 'image/heif';
+      case 'jpg':
+      case 'jpeg':
+      default:
+        return 'image/jpeg';
+    }
+  }
+}
+
 class ChatMessage {
   final String role;
   final String content;
   final ChatAudio? audio; // attached audio; only meaningful on 'user' messages
-  ChatMessage(this.role, this.content, {this.audio});
+  final ChatImage? image; // attached image; only meaningful on 'user' messages
+  ChatMessage(this.role, this.content, {this.audio, this.image});
 }
 
 /// Dispatches a chat request to the wire format described by [dialect].
@@ -74,21 +113,30 @@ class ChatClient {
 
   Future<String> _sendOpenAi(List<ChatMessage> history, http.Client c) async {
     final messages = history.map((m) {
-      if (m.audio == null) {
+      if (m.audio == null && m.image == null) {
         return {'role': m.role, 'content': m.content};
       }
-      // Multipart user message: text + input_audio.
+      // Multipart user message: text + input_audio / image_url.
       return {
         'role': m.role,
         'content': [
           if (m.content.isNotEmpty) {'type': 'text', 'text': m.content},
-          {
-            'type': 'input_audio',
-            'input_audio': {
-              'data': base64Encode(m.audio!.bytes),
-              'format': m.audio!.format,
+          if (m.audio != null)
+            {
+              'type': 'input_audio',
+              'input_audio': {
+                'data': base64Encode(m.audio!.bytes),
+                'format': m.audio!.format,
+              },
             },
-          },
+          if (m.image != null)
+            {
+              'type': 'image_url',
+              'image_url': {
+                'url':
+                    'data:${m.image!.mimeType};base64,${base64Encode(m.image!.bytes)}',
+              },
+            },
         ],
       };
     }).toList();
@@ -137,6 +185,14 @@ class ChatClient {
           'inline_data': {
             'mime_type': m.audio!.mimeType,
             'data': base64Encode(m.audio!.bytes),
+          },
+        });
+      }
+      if (m.image != null) {
+        parts.add({
+          'inline_data': {
+            'mime_type': m.image!.mimeType,
+            'data': base64Encode(m.image!.bytes),
           },
         });
       }

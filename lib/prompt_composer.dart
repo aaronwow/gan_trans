@@ -2,7 +2,13 @@ enum PromptIntent {
   textTranslateOrCorrect,
   directAudioTranslateOrCorrect,
   directAudioJsonTranscriptAndOutput,
+  imageOcrAndTranslate,
 }
+
+/// Stable separator the image OCR+translate intent emits between the extracted
+/// source text and the translated/corrected output. Renderers split on this
+/// to show the two blocks distinctly.
+const String kImageOcrSeparator = '---译文---';
 
 class PromptOptions {
   final PromptIntent intent;
@@ -51,6 +57,14 @@ class PromptComposer {
         return '$scene$task$outputRule不要包含任何时间戳或时间码（例如 00:00、00:04）。';
       case PromptIntent.textTranslateOrCorrect:
         return '用户输入的文字是STT转换的结果，$scene$task$outputRule';
+      case PromptIntent.imageOcrAndTranslate:
+        final imageTask = options.translationEnabled
+            ? '如果原文是$a，翻译成$b；如果原文是$b，翻译成$a。'
+            : '修正原文文字（如有错别字或OCR噪声）。';
+        return '$scene你将看到一张图片。请严格分两段输出：\n'
+            '第一段：逐字提取图片中的全部文字，保留原始换行和段落结构，不要增删、不要解释、不要使用 Markdown。\n'
+            '然后另起一行只输出分隔符：$kImageOcrSeparator\n'
+            '第二段：$imageTask只输出最终结果，不要解释、不要重复原文、不要使用 Markdown。';
     }
   }
 }

@@ -19,6 +19,11 @@ for each stage:
 Some chat models can accept audio directly. For those models, the app can skip
 the separate STT step and run a fused audio-to-translation/correction request.
 
+The app also supports an image input flow that is intentionally separate from
+voice: the user attaches a photo (camera or gallery) and the chat model is
+asked to OCR the picture and translate the extracted text in a single call.
+Image turns never trigger STT or TTS auto-speak.
+
 ## Architecture Overview
 
 The current architecture is intentionally split into catalog, settings,
@@ -28,6 +33,10 @@ runtime clients, prompt composition, and pipeline orchestration.
   - Single source of truth for providers, models, capabilities, credentials,
     voices, and model metadata.
   - Use `Capability` for broad surfaces: `chat`, `stt`, `tts`.
+  - Use `Modality` on `ModelSpec.inputs` to declare which non-text inputs a
+    chat model accepts: `Modality.audio` for fused audio-direct, `Modality.image`
+    for image input. `acceptsAudio()` and `acceptsImage()` are the supported
+    runtime checks; never branch on model ID strings to infer modality.
   - Use `SttTransport` for STT transport details: `batchUpload`, `asyncJob`,
     `realtime`.
   - Use `ModelSpec.supportsDirectAudioTranslate` for chat models that can run
@@ -35,6 +44,12 @@ runtime clients, prompt composition, and pipeline orchestration.
   - If an OpenRouter-hosted Gemini chat model accepts audio and mirrors a
     Google Gemini model with direct audio support, keep its direct-audio
     metadata aligned with the Google catalog entry.
+  - When adding a new chat model, decide its image support deliberately:
+    OpenAI 4o/4.1 family, Anthropic Claude 4.x, Gemini 2.x/3.x, Grok-4 fast
+    variants, and Llama-4 Maverick/Scout currently carry `Modality.image`.
+    Audio-only variants (e.g. `gpt-*-audio-preview`) and pure-text models
+    (DeepSeek text variants, Qwen text variants, Llama 3.3, Mistral text
+    variants, Grok 3) intentionally do not.
   - Do not infer runtime behavior from model ID strings if a catalog field can
     express it.
 
@@ -44,13 +59,23 @@ runtime clients, prompt composition, and pipeline orchestration.
     model, and voice so quick toggles can restore the user's prior selection.
   - When audio-direct chat is active, STT is runtime-paused rather than
     cleared; UI should show STT as unavailable and keep its saved selection.
-  - Builds runtime request objects for chat, STT, and TTS.
+  - Image input has its own optional override: `imageProviderId` /
+    `imageModelId`. Null means "fall back to the chat model" (only valid when
+    that model `acceptsImage()`). Use `effectiveImageProviderId/ModelId`,
+    `imageInputAvailable`, and `buildImageChatRequest()` from runtime code
+    instead of duplicating the fallback logic.
+  - Builds runtime request objects for chat, STT, TTS, and image-chat.
   - Keeps `composedSystemPrompt()` as the settings-facing prompt entry point,
     but actual prompt rules live in `PromptComposer`.
 
 - `lib/prompt_composer.dart`
-  - Owns prompt construction for text STT output, direct audio, and direct audio
-    JSON transcript+output modes.
+  - Owns prompt construction for text STT output, direct audio, direct audio
+    JSON transcript+output, and image OCR + translate modes.
+  - The image intent (`PromptIntent.imageOcrAndTranslate`) emits two sections
+    separated by the stable `kImageOcrSeparator` constant. Renderers split on
+    that constant to show 原文 vs. 译文; do not change the separator without
+    updating both `ImageTranslateStep`'s parser and the chat-screen bubble
+    renderer.
   - Add prompt variants here and test them directly.
 
 - `lib/voice_pipeline.dart`
@@ -67,6 +92,11 @@ runtime clients, prompt composition, and pipeline orchestration.
 
 - `lib/providers.dart`
   - Chat wire clients for provider dialects.
+  - `ChatMessage` carries optional `audio` (`ChatAudio`) and `image`
+    (`ChatImage`) attachments. The OpenAI dialect serializes images as an
+    `image_url` content block with a `data:<mime>;base64,...` URL; the Gemini
+    dialect uses an `inline_data` part. New dialects must implement both
+    encodings before exposing image-capable models.
 
 - `lib/stt_service.dart`
   - File/async STT wire clients.
@@ -81,6 +111,10 @@ runtime clients, prompt composition, and pipeline orchestration.
   - Preserve intermediate fields such as `rawTranscript`,
     `normalizedTranscript`, `translatedText`, `displayText`, `ttsText`, and
     `providerTrace`; they are useful for debugging and future UI surfaces.
+  - Image turns set `image` (a `ChatImage`) and report `imageInput == true`.
+    For image turns, `normalizedTranscript`/`rawTranscript` carry the OCR'd
+    source text and `translatedText` carries the translation — both render in
+    the assistant bubble as separate 原文/译文 sections.
 
 ## Voice Pipeline Strategies
 
@@ -102,6 +136,15 @@ The app currently supports these strategies:
   - User types text.
   - Run selected chat provider for translation/correction.
   - Optionally run selected TTS provider.
+
+- `imageOcrAndTranslate`
+  - User attaches an image (camera or gallery).
+  - Send the image directly to the chat model resolved from
+    `effectiveImageProviderId/ModelId` with the
+    `PromptIntent.imageOcrAndTranslate` system prompt.
+  - Single round-trip: the reply is split on `kImageOcrSeparator` into
+    extracted source text and translated/corrected output.
+  - Never engages STT or TTS, even when those routes are configured.
 
 When adding a new flow, model it as a strategy or step in
 `lib/voice_pipeline.dart` instead of adding another special case to the
@@ -128,6 +171,11 @@ controller.
 - Direct-audio prompts should not frame input as already-transcribed text.
 - Direct-audio JSON prompts must ask for both `transcript` and `output`, and
   should forbid Markdown and timestamps.
+- The image OCR + translate prompt must instruct the model to emit verbatim
+  extracted text first, then the literal `kImageOcrSeparator` line, then the
+  translated/corrected output. Update the parser in `ImageTranslateStep` and
+  the renderer in `chat_screen.dart` together with any change to the
+  separator or section contract.
 - Add or update prompt tests when changing prompt wording or output contracts.
 
 ## Testing
@@ -171,10 +219,14 @@ Relevant tests:
 This file is part of the architecture. Whenever future work changes:
 
 - voice pipeline steps or strategies,
-- model capability metadata,
-- settings or provider selection behavior,
-- prompt composition contracts,
+- model capability metadata (including `Modality` membership and
+  image/audio support),
+- settings or provider selection behavior (chat, STT, TTS, or image),
+- prompt composition contracts (including the image OCR separator),
+- wire-format encodings for non-text content (audio, image, future modalities),
 - realtime/batch fallback behavior,
+- platform permissions (camera, microphone, photo library) or new native
+  dependencies,
 - important test commands or test coverage,
 
 update `AGENTS.md` in the same commit. Outdated agent guidance causes future AI
