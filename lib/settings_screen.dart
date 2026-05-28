@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'catalog.dart';
+import 'provider_model_picker.dart';
 import 'settings.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -46,29 +47,35 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _settingsSection(
             icon: Icons.key_outlined,
             title: 'Providers',
-            subtitle:
-                'Credentials are reused across Chat, STT, and TTS for each provider.',
+            subtitle: '各 provider 的凭证会复用于 Chat、STT 和 TTS。',
             children: [for (final p in kCatalog) _providerCard(p)],
           ),
           const SizedBox(height: 14),
           _settingsSection(
             icon: Icons.chat_bubble_outline,
             title: 'Chat',
-            subtitle: 'Choose the assistant model and context behavior.',
+            subtitle: '选择对话模型和上下文策略。',
             children: [
-              _capabilityPicker(
+              ProviderModelPicker(
+                settings: s,
                 cap: Capability.chat,
                 providerId: s.chatProviderId,
                 modelId: s.chatModelId,
-                onProvider: (id) => s.setChatProvider(id!),
-                onModel: (id) => s.setChatModel(id),
                 allowOff: false,
+                onProvider: (id) async {
+                  if (id == null) return;
+                  await s.setChatProvider(id);
+                  if (mounted) setState(() {});
+                },
+                onModel: (id) async {
+                  await s.setChatModel(id);
+                  if (mounted) setState(() {});
+                },
               ),
               const SizedBox(height: 10),
               _settingsSwitch(
                 title: 'Include scene prompt',
-                subtitle:
-                    'Inject the active scene prompt into the chat system prompt.',
+                subtitle: '每次 Chat 请求都带上当前场景提示词。',
                 value: s.includeScenePrompt,
                 onChanged: (v) {
                   s.setIncludeScenePrompt(v);
@@ -78,8 +85,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               _settingsSwitch(
                 title: 'Audio direct',
                 subtitle: s.chatModelAcceptsAudio
-                    ? 'Send recordings straight to chat and skip STT for that turn.'
-                    : 'Current chat model has no audio input. Pick Gemini or an audio-capable OpenAI model.',
+                    ? '录音直接发送给 Chat，跳过 STT。'
+                    : '当前 Chat 模型不支持音频输入，请换用支持音频的模型。',
                 value: s.audioDirectChat && s.chatModelAcceptsAudio,
                 onChanged: s.chatModelAcceptsAudio
                     ? (v) {
@@ -91,8 +98,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               if (s.audioDirectActive)
                 _settingsSwitch(
                   title: 'Return original transcript',
-                  subtitle:
-                      'Ask for JSON with the raw transcript and corrected output.',
+                  subtitle: '要求模型返回原始转录和最终输出。',
                   value: s.audioDirectIncludeTranscript,
                   onChanged: (v) {
                     s.setAudioDirectIncludeTranscript(v);
@@ -106,8 +112,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             icon: Icons.graphic_eq,
             title: 'Speech-to-Text',
             subtitle: s.audioDirectActive
-                ? 'Paused because Audio direct sends audio to Chat.'
-                : 'Recognition model for microphone input.',
+                ? 'Audio direct 已接管语音输入，STT 暂停。'
+                : '麦克风输入使用的识别模型。',
             children: [
               Opacity(
                 opacity: s.audioDirectActive ? 0.54 : 1,
@@ -118,18 +124,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       _settingsNotice(
                         icon: Icons.info_outline,
                         text:
-                            'Audio direct is on. STT is not used for voice turns, and this route is locked until Audio direct is off.',
+                            'Audio direct 已开启：语音会直接发送给 Chat，关闭 Audio direct 后才能调整 STT。',
                       ),
                       const SizedBox(height: 10),
                     ],
-                    _capabilityPicker(
+                    ProviderModelPicker(
+                      settings: s,
                       cap: Capability.stt,
                       providerId: s.sttProviderId,
                       modelId: s.sttModelId,
-                      onProvider: (id) => s.setSttProvider(id),
-                      onModel: (id) => s.setSttModel(id),
                       allowOff: true,
                       enabled: !s.audioDirectActive,
+                      onProvider: (id) async {
+                        await s.setSttProvider(id);
+                        if (mounted) setState(() {});
+                      },
+                      onModel: (id) async {
+                        await s.setSttModel(id);
+                        if (mounted) setState(() {});
+                      },
                     ),
                   ],
                 ),
@@ -140,15 +153,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _settingsSection(
             icon: Icons.volume_up_outlined,
             title: 'Text-to-Speech',
-            subtitle: 'Voice model and playback behavior.',
+            subtitle: '语音播放模型和自动播放行为。',
             children: [
-              _capabilityPicker(
+              ProviderModelPicker(
+                settings: s,
                 cap: Capability.tts,
                 providerId: s.ttsProviderId,
                 modelId: s.ttsModelId,
-                onProvider: (id) => s.setTtsProvider(id),
-                onModel: (id) => s.setTtsModel(id),
                 allowOff: true,
+                onProvider: (id) async {
+                  await s.setTtsProvider(id);
+                  if (mounted) setState(() {});
+                },
+                onModel: (id) async {
+                  await s.setTtsModel(id);
+                  if (mounted) setState(() {});
+                },
               ),
               if (s.ttsProviderId != null) ...[
                 const SizedBox(height: 12),
@@ -156,8 +176,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 const SizedBox(height: 10),
                 _settingsSwitch(
                   title: 'Auto-speak assistant replies',
-                  subtitle:
-                      'Play generated audio automatically after each reply.',
+                  subtitle: '每次回复生成后自动播放 TTS。',
                   value: s.ttsAutoSpeak,
                   onChanged: (v) {
                     s.setTtsAutoSpeak(v);
@@ -172,12 +191,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _settingsSection(
             icon: Icons.mic_none,
             title: 'Microphone',
-            subtitle: 'Recording filters and voice activity detection.',
+            subtitle: '录音滤波和语音活动检测。',
             children: [
               _settingsSwitch(
                 title: 'Acoustic echo cancellation',
-                subtitle:
-                    'Suppress speaker-to-mic feedback during full-duplex playback.',
+                subtitle: '降低 Full-duplex 播放时扬声器回到麦克风的回声。',
                 value: s.aecEnabled,
                 onChanged: (v) {
                   s.setAecEnabled(v);
@@ -185,7 +203,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 },
               ),
               _settingsSlider(
-                title: 'Pause before auto-stop',
+                title: '静音多久后自动切分',
                 valueText: '${s.vadPauseSeconds.toStringAsFixed(1)}s',
                 slider: Slider(
                   value: s.vadPauseSeconds.clamp(0.1, 10.0),
@@ -200,7 +218,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               ),
               _settingsSlider(
-                title: 'Max listen duration',
+                title: '最长监听时间',
                 valueText: '${s.vadListenSeconds}s',
                 slider: Slider(
                   value: s.vadListenSeconds.toDouble(),
@@ -215,7 +233,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               ),
               _settingsSlider(
-                title: 'Ignore recordings shorter than',
+                title: '忽略过短录音',
                 valueText: '${s.minRecordSeconds.toStringAsFixed(1)}s',
                 slider: Slider(
                   value: s.minRecordSeconds.clamp(0.1, 5.0),
@@ -235,7 +253,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _settingsSection(
             icon: Icons.timer_outlined,
             title: 'Response Limits',
-            subtitle: 'Timeouts and context window used around voice turns.',
+            subtitle: '语音链路使用的超时和上下文窗口。',
             children: [
               _settingsSlider(
                 title: 'STT timeout',
@@ -337,7 +355,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Control center',
+                  '控制中心',
                   style: TextStyle(
                     color: cs.onPrimaryContainer,
                     fontSize: 20,
@@ -346,7 +364,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  'Manage providers, model routing, voice, and timeouts.',
+                  '管理 provider、模型路由、语音和超时。',
                   style: TextStyle(
                     color: cs.onPrimaryContainer.withValues(alpha: 0.72),
                     fontSize: 13,
@@ -617,107 +635,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ],
         ),
       ),
-    );
-  }
-
-  Widget _capabilityPicker({
-    required Capability cap,
-    required String? providerId,
-    required String modelId,
-    required ValueChanged<String?> onProvider,
-    required ValueChanged<String> onModel,
-    required bool allowOff,
-    bool enabled = true,
-  }) {
-    final s = widget.settings;
-    final cs = Theme.of(context).colorScheme;
-    final providers = providersFor(cap).toList();
-    final selectedProvider = findProvider(providerId);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        DropdownButtonFormField<String?>(
-          initialValue: providerId,
-          isExpanded: true,
-          decoration: const InputDecoration(
-            labelText: 'Provider',
-            isDense: true,
-          ),
-          items: [
-            if (allowOff)
-              const DropdownMenuItem<String?>(value: null, child: Text('Off')),
-            for (final p in providers)
-              DropdownMenuItem<String?>(
-                value: p.id,
-                enabled: s.hasCredentials(p.id),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        p.name,
-                        style: TextStyle(
-                          color: s.hasCredentials(p.id)
-                              ? null
-                              : cs.onSurfaceVariant.withValues(alpha: 0.5),
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    if (!s.hasCredentials(p.id))
-                      Text(
-                        'no API key',
-                        style: TextStyle(
-                          color: cs.error,
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-          ],
-          onChanged: enabled
-              ? (v) {
-                  onProvider(v);
-                  setState(() {});
-                }
-              : null,
-        ),
-        if (selectedProvider != null) ...[
-          const SizedBox(height: 8),
-          Builder(
-            builder: (_) {
-              final models = selectedProvider.modelsFor(cap).toList();
-              final value = models.any((m) => m.id == modelId)
-                  ? modelId
-                  : (models.isEmpty ? null : models.first.id);
-              return DropdownButtonFormField<String>(
-                initialValue: value,
-                isExpanded: true,
-                decoration: const InputDecoration(
-                  labelText: 'Model',
-                  isDense: true,
-                ),
-                items: models
-                    .map(
-                      (m) => DropdownMenuItem(
-                        value: m.id,
-                        child: Text(m.label, overflow: TextOverflow.ellipsis),
-                      ),
-                    )
-                    .toList(),
-                onChanged: enabled
-                    ? (v) {
-                        if (v == null) return;
-                        onModel(v);
-                        setState(() {});
-                      }
-                    : null,
-              );
-            },
-          ),
-        ],
-      ],
     );
   }
 

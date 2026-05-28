@@ -7,10 +7,12 @@ import 'catalog.dart';
 import 'chat_conversation_controller.dart';
 import 'chat_turn.dart';
 import 'main.dart';
+import 'provider_model_picker.dart';
 import 'providers.dart';
 import 'scenes_screen.dart';
 import 'settings.dart';
 import 'settings_screen.dart';
+import 'user_messages.dart';
 
 part 'chat_widgets.dart';
 
@@ -83,11 +85,25 @@ class _ChatScreenState extends State<ChatScreen>
     super.dispose();
   }
 
-  void _sendTypedText() {
+  Future<void> _sendTypedText() async {
     final text = _textInput.text.trim();
-    if (text.isEmpty) return;
-    _textInput.clear();
-    _chat.sendTypedText(text);
+    if (text.isNotEmpty) {
+      _textInput.clear();
+      _chat.sendTypedText(text);
+      return;
+    }
+
+    try {
+      final data = await Clipboard.getData(Clipboard.kTextPlain);
+      final clipboardText = data?.text?.trim() ?? '';
+      if (clipboardText.isEmpty) {
+        _showSnack('剪贴板没有可发送的文字');
+        return;
+      }
+      _chat.sendTypedText(clipboardText);
+    } catch (e) {
+      _showSnack('无法读取剪贴板：$e');
+    }
   }
 
   final ImagePicker _imagePicker = ImagePicker();
@@ -106,7 +122,7 @@ class _ChatScreenState extends State<ChatScreen>
       _chat.sendImage(ChatImage(bytes: bytes, format: format));
     } catch (e) {
       if (!mounted) return;
-      _showSnack('Image error: $e');
+      _showSnack(compactUserError(e, fallback: '图片读取失败'));
     }
   }
 
@@ -281,10 +297,7 @@ class _ChatScreenState extends State<ChatScreen>
                           overrideOn
                               ? '请选择一个支持图片输入的模型。'
                               : '当前对话模型不支持图片输入，请打开上面的开关挑选支持视觉的模型。',
-                          style: TextStyle(
-                            color: cs.error,
-                            fontSize: 12,
-                          ),
+                          style: TextStyle(color: cs.error, fontSize: 12),
                         ),
                       )
                     else
@@ -306,9 +319,7 @@ class _ChatScreenState extends State<ChatScreen>
                             onPressed: canSend
                                 ? () async {
                                     Navigator.of(ctx).pop();
-                                    await _pickAndSendImage(
-                                      ImageSource.camera,
-                                    );
+                                    await _pickAndSendImage(ImageSource.camera);
                                   }
                                 : null,
                             icon: const Icon(Icons.photo_camera_outlined),
@@ -360,7 +371,7 @@ class _ChatScreenState extends State<ChatScreen>
 
   void _copyMessage(String text) {
     Clipboard.setData(ClipboardData(text: text));
-    _showSnack('Copied');
+    _showSnack('已复制');
   }
 
   Future<void> _toggleVoiceMode() async {
@@ -388,7 +399,7 @@ class _ChatScreenState extends State<ChatScreen>
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text(
-                  'VAD quick adjust',
+                  'VAD 快速调整',
                   style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                 ),
                 const SizedBox(height: 12),
@@ -403,14 +414,14 @@ class _ChatScreenState extends State<ChatScreen>
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const Text(
-                        'Conversation mode',
+                        '对话模式',
                         style: TextStyle(fontWeight: FontWeight.w700),
                       ),
                       const SizedBox(height: 4),
                       Text(
                         s.continuousFullDuplex
-                            ? 'Full-duplex keeps listening while replies can play.'
-                            : 'Half-duplex pauses listening while the assistant replies.',
+                            ? 'Full-duplex：播放回复时继续监听。'
+                            : 'Half-duplex：处理和播放回复时暂停麦克风。',
                         style: TextStyle(
                           color: cs.onSurfaceVariant,
                           fontSize: 12,
@@ -433,7 +444,7 @@ class _ChatScreenState extends State<ChatScreen>
                 ),
                 const SizedBox(height: 16),
                 Text(
-                  'Silence cutoff: ${s.vadPauseSeconds.toStringAsFixed(1)}s',
+                  '静音切分：${s.vadPauseSeconds.toStringAsFixed(1)}s',
                   style: const TextStyle(fontWeight: FontWeight.w600),
                 ),
                 Slider(
@@ -449,7 +460,7 @@ class _ChatScreenState extends State<ChatScreen>
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'Speech threshold: ${s.vadThresholdLevel.toStringAsFixed(1)}',
+                  '语音阈值：${s.vadThresholdLevel.toStringAsFixed(1)}',
                   style: const TextStyle(fontWeight: FontWeight.w600),
                 ),
                 Slider(
@@ -465,8 +476,7 @@ class _ChatScreenState extends State<ChatScreen>
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  'Segments are cut after ${s.vadPauseSeconds.toStringAsFixed(1)}s of silence '
-                  'below threshold, then auto-sent.',
+                  '低于阈值并静音 ${s.vadPauseSeconds.toStringAsFixed(1)}s 后会自动切分并发送。',
                   style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12),
                 ),
               ],
@@ -504,10 +514,15 @@ class _ChatScreenState extends State<ChatScreen>
               const SizedBox(width: 8),
               _IconPill(
                 icon: Icons.image_outlined,
+                tooltip: '图片翻译',
                 onTap: _openImageSheet,
               ),
               const SizedBox(width: 8),
-              _IconPill(icon: Icons.tune, onTap: _openConfigSheet),
+              _IconPill(
+                icon: Icons.tune,
+                tooltip: '模型与语音快调',
+                onTap: _openConfigSheet,
+              ),
             ],
           ),
           Divider(height: 18, color: cs.outlineVariant.withValues(alpha: 0.7)),
@@ -532,7 +547,7 @@ class _ChatScreenState extends State<ChatScreen>
                 child: _RoutingToggle(
                   icon: Icons.graphic_eq,
                   label: audioDirectActive ? 'STT暂停' : 'STT',
-                  tooltip: 'Speech-to-Text',
+                  tooltip: 'STT 语音识别',
                   enabled: s.sttProviderId != null && !audioDirectActive,
                   interactive: !audioDirectActive,
                   onTap: () async {
@@ -546,7 +561,7 @@ class _ChatScreenState extends State<ChatScreen>
                 child: _RoutingToggle(
                   icon: Icons.volume_up_outlined,
                   label: 'TTS',
-                  tooltip: 'Text-to-Speech',
+                  tooltip: 'TTS 语音播放',
                   enabled: s.ttsProviderId != null,
                   onTap: () async {
                     await s.setTtsEnabled(s.ttsProviderId == null);
@@ -571,7 +586,7 @@ class _ChatScreenState extends State<ChatScreen>
           builder: (ctx, setD) {
             final langsEqual = s.translationLangA == s.translationLangB;
             return AlertDialog(
-              title: const Text('Translation languages'),
+              title: const Text('翻译语言'),
               content: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -579,7 +594,7 @@ class _ChatScreenState extends State<ChatScreen>
                     initialValue: s.translationLangA,
                     isExpanded: true,
                     decoration: const InputDecoration(
-                      labelText: 'Language A',
+                      labelText: '语言 A',
                       isDense: true,
                     ),
                     items: kTranslationLanguages
@@ -597,7 +612,7 @@ class _ChatScreenState extends State<ChatScreen>
                     initialValue: s.translationLangB,
                     isExpanded: true,
                     decoration: const InputDecoration(
-                      labelText: 'Language B',
+                      labelText: '语言 B',
                       isDense: true,
                     ),
                     items: kTranslationLanguages
@@ -619,7 +634,7 @@ class _ChatScreenState extends State<ChatScreen>
                           const SizedBox(width: 6),
                           Expanded(
                             child: Text(
-                              'Pick two different languages.',
+                              '请选择两个不同的语言。',
                               style: TextStyle(color: cs.error, fontSize: 12),
                             ),
                           ),
@@ -631,7 +646,7 @@ class _ChatScreenState extends State<ChatScreen>
               actions: [
                 TextButton(
                   onPressed: () => Navigator.pop(ctx),
-                  child: const Text('Done'),
+                  child: const Text('完成'),
                 ),
               ],
             );
@@ -650,9 +665,7 @@ class _ChatScreenState extends State<ChatScreen>
     return _sheetSection(
       icon: Icons.translate,
       title: '修正+翻译',
-      subtitle: s.correctionEnabled
-          ? 'Pick a language pair for corrected output'
-          : 'Correction and translation are off',
+      subtitle: s.correctionEnabled ? '选择修正后输出的语言方向' : '修正和翻译已关闭',
       trailing: Switch(
         value: s.correctionEnabled,
         onChanged: (v) async {
@@ -666,8 +679,8 @@ class _ChatScreenState extends State<ChatScreen>
         child: Column(
           children: [
             _sheetSwitch(
-              title: 'Translate between languages',
-              subtitle: 'Off keeps the correction-only mode.',
+              title: '双向翻译',
+              subtitle: '关闭后只做文字修正。',
               value: s.translationEnabled,
               onChanged: !s.correctionEnabled || langsEqual
                   ? null
@@ -686,7 +699,7 @@ class _ChatScreenState extends State<ChatScreen>
                     initialValue: s.translationLangA,
                     isExpanded: true,
                     decoration: const InputDecoration(
-                      labelText: 'Language A',
+                      labelText: '语言 A',
                       isDense: true,
                     ),
                     items: kTranslationLanguages
@@ -715,7 +728,7 @@ class _ChatScreenState extends State<ChatScreen>
                     initialValue: s.translationLangB,
                     isExpanded: true,
                     decoration: const InputDecoration(
-                      labelText: 'Language B',
+                      labelText: '语言 B',
                       isDense: true,
                     ),
                     items: kTranslationLanguages
@@ -741,7 +754,7 @@ class _ChatScreenState extends State<ChatScreen>
                     Icon(Icons.info_outline, size: 16, color: cs.error),
                     const SizedBox(width: 6),
                     Text(
-                      'Pick two different languages.',
+                      '请选择两个不同的语言。',
                       style: TextStyle(color: cs.error, fontSize: 12),
                     ),
                   ],
@@ -811,7 +824,7 @@ class _ChatScreenState extends State<ChatScreen>
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                'Model routing',
+                                '模型路由',
                                 style: TextStyle(
                                   fontSize: 18,
                                   fontWeight: FontWeight.w700,
@@ -819,7 +832,7 @@ class _ChatScreenState extends State<ChatScreen>
                               ),
                               SizedBox(height: 2),
                               Text(
-                                'Choose models for chat, speech, and playback.',
+                                '快速选择 Chat、STT 和 TTS 路由。',
                                 style: TextStyle(fontSize: 12),
                               ),
                             ],
@@ -834,8 +847,8 @@ class _ChatScreenState extends State<ChatScreen>
                       icon: Icons.graphic_eq,
                       title: 'Speech-to-Text',
                       subtitle: audioDirectActive
-                          ? 'Paused because Audio direct sends audio to Chat'
-                          : 'Recognition provider for microphone input',
+                          ? 'Audio direct 已接管语音输入，STT 暂停'
+                          : '麦克风输入使用的识别 provider',
                       child: Opacity(
                         opacity: audioDirectActive ? 0.54 : 1,
                         child: Column(
@@ -845,11 +858,12 @@ class _ChatScreenState extends State<ChatScreen>
                               _sheetNotice(
                                 icon: Icons.info_outline,
                                 text:
-                                    'Audio direct is on. STT is not used for voice turns, and this route is locked until Audio direct is off.',
+                                    'Audio direct 已开启：语音会直接发送给 Chat，关闭 Audio direct 后才能调整 STT。',
                               ),
                               const SizedBox(height: 10),
                             ],
-                            _ProviderModelPicker(
+                            ProviderModelPicker(
+                              settings: s,
                               cap: Capability.stt,
                               providerId: s.sttProviderId,
                               modelId: s.sttModelId,
@@ -874,11 +888,12 @@ class _ChatScreenState extends State<ChatScreen>
                     _sheetSection(
                       icon: Icons.chat_bubble_outline,
                       title: 'Chat',
-                      subtitle: 'Assistant model and prompt handling',
+                      subtitle: '对话模型和提示词处理',
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          _ProviderModelPicker(
+                          ProviderModelPicker(
+                            settings: s,
                             cap: Capability.chat,
                             providerId: s.chatProviderId,
                             modelId: s.chatModelId,
@@ -897,8 +912,7 @@ class _ChatScreenState extends State<ChatScreen>
                           const SizedBox(height: 10),
                           _sheetSwitch(
                             title: 'Include scene prompt',
-                            subtitle:
-                                'Attach the active scene to each chat turn.',
+                            subtitle: '每次 Chat 请求都带上当前场景提示词。',
                             value: s.includeScenePrompt,
                             onChanged: (v) async {
                               await s.setIncludeScenePrompt(v);
@@ -909,8 +923,8 @@ class _ChatScreenState extends State<ChatScreen>
                           _sheetSwitch(
                             title: 'Audio direct',
                             subtitle: s.chatModelAcceptsAudio
-                                ? 'Send recordings straight to chat and skip STT.'
-                                : 'Current chat model has no audio input.',
+                                ? '录音直接发送给 Chat，跳过 STT。'
+                                : '当前 Chat 模型不支持音频输入，请换用支持音频的模型。',
                             value: s.audioDirectChat && s.chatModelAcceptsAudio,
                             onChanged: s.chatModelAcceptsAudio
                                 ? (v) async {
@@ -923,8 +937,7 @@ class _ChatScreenState extends State<ChatScreen>
                           if (s.audioDirectActive)
                             _sheetSwitch(
                               title: 'Return original transcript',
-                              subtitle:
-                                  'Ask for JSON containing raw and final text.',
+                              subtitle: '要求模型返回原始转录和最终输出。',
                               value: s.audioDirectIncludeTranscript,
                               onChanged: (v) async {
                                 await s.setAudioDirectIncludeTranscript(v);
@@ -939,8 +952,9 @@ class _ChatScreenState extends State<ChatScreen>
                     _sheetSection(
                       icon: Icons.volume_up_outlined,
                       title: 'Text-to-Speech',
-                      subtitle: 'Voice model used for assistant replies',
-                      child: _ProviderModelPicker(
+                      subtitle: '助手回复使用的语音播放模型',
+                      child: ProviderModelPicker(
+                        settings: s,
                         cap: Capability.tts,
                         providerId: s.ttsProviderId,
                         modelId: s.ttsModelId,
@@ -956,6 +970,20 @@ class _ChatScreenState extends State<ChatScreen>
                           if (mounted) setState(() {});
                         },
                       ),
+                    ),
+                    const SizedBox(height: 12),
+                    OutlinedButton.icon(
+                      onPressed: () {
+                        Navigator.of(ctx).pop();
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => SettingsScreen(settings: s),
+                          ),
+                        );
+                      },
+                      icon: const Icon(Icons.settings_outlined),
+                      label: const Text('进入完整 Settings'),
                     ),
                   ],
                 );
@@ -1113,7 +1141,7 @@ class _ChatScreenState extends State<ChatScreen>
         (t.fusedAudio && t.state == TurnState.sending);
     Widget content;
     if (isPending) {
-      final label = t.fusedAudio ? 'Sending audio…' : 'Transcribing…';
+      final label = t.fusedAudio ? '正在发送音频…' : '正在识别语音…';
       content = Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -1140,8 +1168,8 @@ class _ChatScreenState extends State<ChatScreen>
       );
     } else if (isError) {
       final errText = t.errorExpanded
-          ? 'STT failed: ${_errorShort(t.lastError)}'
-          : _sttErrorSummary(t.lastError);
+          ? expandedUserError(t.lastError, fallback: 'STT 失败')
+          : compactUserError(t.lastError, fallback: 'STT 失败');
       content = Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -1172,7 +1200,7 @@ class _ChatScreenState extends State<ChatScreen>
         children: [
           Icon(Icons.mic, size: 16, color: cs.onPrimary),
           const SizedBox(width: 6),
-          Text('Audio', style: TextStyle(color: cs.onPrimary, height: 1.35)),
+          Text('音频', style: TextStyle(color: cs.onPrimary, height: 1.35)),
         ],
       );
     } else if (t.imageInput) {
@@ -1250,7 +1278,7 @@ class _ChatScreenState extends State<ChatScreen>
           ),
           const SizedBox(width: 8),
           Text(
-            t.state == TurnState.waitingLlm ? 'Queued…' : 'Thinking…',
+            t.state == TurnState.waitingLlm ? '排队中…' : '思考中…',
             style: TextStyle(color: cs.onSurfaceVariant, height: 1.35),
           ),
           const SizedBox(width: 6),
@@ -1265,13 +1293,20 @@ class _ChatScreenState extends State<ChatScreen>
         ],
       );
     } else if (isError) {
+      final errText = t.errorExpanded
+          ? expandedUserError(t.lastError, fallback: '回复失败')
+          : compactUserError(t.lastError, fallback: '回复失败');
       content = Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           Flexible(
-            child: Text(
-              'Reply failed: ${_errorShort(t.lastError)}',
-              style: TextStyle(color: cs.onErrorContainer, height: 1.35),
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => setState(() => t.errorExpanded = !t.errorExpanded),
+              child: Text(
+                errText,
+                style: TextStyle(color: cs.onErrorContainer, height: 1.35),
+              ),
             ),
           ),
           const SizedBox(width: 6),
@@ -1291,8 +1326,7 @@ class _ChatScreenState extends State<ChatScreen>
       // back to a single block so the user still sees the raw reply.
       final original = t.normalizedTranscript ?? t.rawTranscript;
       final output = t.translatedText ?? text ?? '';
-      final originalIsRich =
-          original != null && original.trim().isNotEmpty;
+      final originalIsRich = original != null && original.trim().isNotEmpty;
       content = Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
@@ -1425,21 +1459,6 @@ class _ChatScreenState extends State<ChatScreen>
     );
   }
 
-  String _sttErrorSummary(Object? e) {
-    if (e == null) return 'speech to text error';
-    final s = e.toString();
-    if (s.contains('20000003') || s.toLowerCase().contains('no valid speech')) {
-      return 'no valid speech in audio body';
-    }
-    return 'speech to text error';
-  }
-
-  String _errorShort(Object? e) {
-    if (e == null) return '';
-    final s = e.toString();
-    return s.length > 120 ? '${s.substring(0, 120)}…' : s;
-  }
-
   // ---------- Bottom mic ----------
 
   Widget _bottomBar() {
@@ -1549,7 +1568,7 @@ class _ChatScreenState extends State<ChatScreen>
                 textInputAction: TextInputAction.send,
                 onSubmitted: (_) => _sendTypedText(),
                 decoration: InputDecoration(
-                  hintText: 'Type a message…',
+                  hintText: '输入文字…',
                   isDense: true,
                   filled: true,
                   fillColor: cs.surfaceContainerHighest,
@@ -1589,34 +1608,30 @@ class _ChatScreenState extends State<ChatScreen>
               t.state == TurnState.sending,
         )
         .length;
-    final pendingSuffix = pending > 0 ? ' · $pending in flight' : '';
+    final pendingSuffix = pending > 0 ? ' · $pending 个处理中' : '';
     if (mode == VoiceMode.pushToTalk) {
-      final base = _chat.listening ? 'Release to send' : 'Hold to talk';
+      final base = _chat.listening ? '松开发送' : '按住说话';
       return '$base$pendingSuffix';
     }
     // continuous mode
     if (s.continuousFullDuplex) {
       if (_chat.listening || _chat.autoRestarting) {
-        final base = _chat.speakingNow
-            ? 'Listening…'
-            : 'Silent (auto-send on pause)';
+        final base = _chat.speakingNow ? '正在监听…' : '静音中（停顿后自动发送）';
         return '$base$pendingSuffix';
       }
-      return 'Tap to start continuous listening$pendingSuffix';
+      return '点击开始连续监听$pendingSuffix';
     }
     // half-duplex inside continuous
     if (!_chat.continuousLoopActive) {
-      return 'Tap to start half-duplex listening$pendingSuffix';
+      return '点击开始 Half-duplex 连续监听$pendingSuffix';
     }
     if (_chat.listening) {
-      final base = _chat.speakingNow
-          ? 'Listening…'
-          : 'Silent (auto-send on pause)';
+      final base = _chat.speakingNow ? '正在监听…' : '静音中（停顿后自动发送）';
       return '$base$pendingSuffix';
     }
-    if (_chat.ttsPlaying) return 'Speaking — mic paused$pendingSuffix';
-    if (_chat.pipelineBusy) return 'Processing — mic paused$pendingSuffix';
-    return 'Resuming…$pendingSuffix';
+    if (_chat.ttsPlaying) return '正在播放 TTS，麦克风暂停$pendingSuffix';
+    if (_chat.pipelineBusy) return '处理中，麦克风暂停$pendingSuffix';
+    return '正在恢复监听…$pendingSuffix';
   }
 
   // ---------- Build ----------
@@ -1632,11 +1647,12 @@ class _ChatScreenState extends State<ChatScreen>
         actions: [
           IconButton(
             icon: const Icon(Icons.delete_outline),
-            tooltip: 'Clear conversation',
+            tooltip: '清空对话',
             onPressed: () => unawaited(_chat.clearConversation()),
           ),
           IconButton(
             icon: const Icon(Icons.settings_outlined),
+            tooltip: '完整 Settings',
             onPressed: () => Navigator.push(
               context,
               MaterialPageRoute(

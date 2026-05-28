@@ -49,23 +49,31 @@ class _PillButton extends StatelessWidget {
 
 class _IconPill extends StatelessWidget {
   final IconData icon;
+  final String tooltip;
   final VoidCallback onTap;
 
-  const _IconPill({required this.icon, required this.onTap});
+  const _IconPill({
+    required this.icon,
+    required this.tooltip,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(24),
-      child: Container(
-        padding: const EdgeInsets.all(10),
-        decoration: BoxDecoration(
-          color: cs.surfaceContainerHighest,
-          borderRadius: BorderRadius.circular(24),
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(24),
+        child: Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: cs.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(24),
+          ),
+          child: Icon(icon, size: 20, color: cs.onSurfaceVariant),
         ),
-        child: Icon(icon, size: 20, color: cs.onSurfaceVariant),
       ),
     );
   }
@@ -96,8 +104,8 @@ class _RoutingToggle extends StatelessWidget {
     final fg = active ? cs.onPrimaryContainer : cs.onSurfaceVariant;
     return Tooltip(
       message: !interactive
-          ? '$tooltip paused by Audio direct'
-          : '$tooltip ${enabled ? "on" : "off"}',
+          ? '$tooltip 已由 Audio direct 暂停'
+          : '$tooltip ${enabled ? "开启" : "关闭"}',
       child: InkWell(
         onTap: interactive ? onTap : null,
         borderRadius: BorderRadius.circular(18),
@@ -160,7 +168,7 @@ class _TranslationRoutingToggle extends StatelessWidget {
     final fg = enabled ? cs.onPrimaryContainer : cs.onSurfaceVariant;
     final divider = fg.withValues(alpha: 0.24);
     return Tooltip(
-      message: '$label ${enabled ? "on" : "off"}',
+      message: '$label ${enabled ? "开启" : "关闭"}',
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 160),
         height: 42,
@@ -204,7 +212,7 @@ class _TranslationRoutingToggle extends StatelessWidget {
             Container(width: 1, height: 24, color: divider),
             Expanded(
               child: Tooltip(
-                message: 'Change translation languages',
+                message: '调整翻译语言',
                 child: InkWell(
                   onTap: onLanguagesTap,
                   child: Padding(
@@ -250,9 +258,7 @@ class _ModeToggleButton extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     final isContinuous = mode == VoiceMode.continuous;
     return Tooltip(
-      message: isContinuous
-          ? 'Continuous mode — tap to switch to push-to-talk'
-          : 'Push-to-talk — tap to switch to continuous',
+      message: isContinuous ? '连续监听模式，点击切换为按住说话' : '按住说话模式，点击切换为连续监听',
       child: InkWell(
         onTap: onTap,
         customBorder: const CircleBorder(),
@@ -370,10 +376,8 @@ class _MicBarState extends State<_MicBar> {
     final label = _armed
         ? '松开取消'
         : (widget.listening
-              ? (widget.continuous
-                    ? 'Listening — tap to stop'
-                    : 'Release to send')
-              : (widget.continuous ? 'Tap to start' : 'Hold to talk'));
+              ? (widget.continuous ? '监听中，点击停止' : '松开发送')
+              : (widget.continuous ? '点击开始' : '按住说话'));
     final icon = _armed
         ? Icons.delete_outline
         : (widget.listening ? Icons.graphic_eq : Icons.mic);
@@ -538,86 +542,6 @@ class _LevelMeter extends StatelessWidget {
   }
 }
 
-/// Two-step provider -> model picker used in the config sheet. Filters
-/// providers by [cap] and renders an "Off" option iff [allowOff].
-class _ProviderModelPicker extends StatelessWidget {
-  final Capability cap;
-  final String? providerId;
-  final String modelId;
-  final bool allowOff;
-  final bool enabled;
-  final ValueChanged<String?> onProvider;
-  final ValueChanged<String> onModel;
-
-  const _ProviderModelPicker({
-    required this.cap,
-    required this.providerId,
-    required this.modelId,
-    required this.allowOff,
-    this.enabled = true,
-    required this.onProvider,
-    required this.onModel,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final providers = providersFor(cap).toList();
-    final selected = findProvider(providerId);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        DropdownButtonFormField<String?>(
-          initialValue: providerId,
-          isExpanded: true,
-          decoration: const InputDecoration(
-            labelText: 'Provider',
-            isDense: true,
-          ),
-          items: [
-            if (allowOff)
-              const DropdownMenuItem<String?>(value: null, child: Text('Off')),
-            for (final p in providers)
-              DropdownMenuItem<String?>(value: p.id, child: Text(p.name)),
-          ],
-          onChanged: enabled ? onProvider : null,
-        ),
-        if (selected != null) ...[
-          const SizedBox(height: 8),
-          Builder(
-            builder: (_) {
-              final models = selected.modelsFor(cap).toList();
-              final value = models.any((m) => m.id == modelId)
-                  ? modelId
-                  : (models.isEmpty ? null : models.first.id);
-              return DropdownButtonFormField<String>(
-                initialValue: value,
-                isExpanded: true,
-                decoration: const InputDecoration(
-                  labelText: 'Model',
-                  isDense: true,
-                ),
-                items: models
-                    .map(
-                      (m) => DropdownMenuItem(
-                        value: m.id,
-                        child: Text(m.label, overflow: TextOverflow.ellipsis),
-                      ),
-                    )
-                    .toList(),
-                onChanged: enabled
-                    ? (v) {
-                        if (v != null) onModel(v);
-                      }
-                    : null,
-              );
-            },
-          ),
-        ],
-      ],
-    );
-  }
-}
-
 class _EmptyState extends StatelessWidget {
   final String sceneName;
 
@@ -639,7 +563,7 @@ class _EmptyState extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             Text(
-              'Scene: $sceneName',
+              '当前场景：$sceneName',
               style: TextStyle(
                 color: cs.onSurfaceVariant,
                 fontWeight: FontWeight.w600,
@@ -647,7 +571,7 @@ class _EmptyState extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             Text(
-              'Hold the mic to talk, release to send.',
+              '按住麦克风开始说话，松开后发送。',
               textAlign: TextAlign.center,
               style: TextStyle(color: cs.onSurfaceVariant),
             ),
