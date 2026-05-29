@@ -1566,6 +1566,8 @@ class _ChatScreenState extends State<ChatScreen>
                 minLines: 1,
                 maxLines: 5,
                 textInputAction: TextInputAction.send,
+                onTapOutside: (_) =>
+                    FocusManager.instance.primaryFocus?.unfocus(),
                 onSubmitted: (_) => _sendTypedText(),
                 decoration: InputDecoration(
                   hintText: '输入文字…',

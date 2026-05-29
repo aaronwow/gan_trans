@@ -69,4 +69,20 @@ void main() {
 
     expect(find.text('从剪贴板发送'), findsOneWidget);
   });
+
+  testWidgets('tapping outside text input dismisses keyboard', (tester) async {
+    final settings = await loadSettings();
+
+    await tester.pumpWidget(MaterialApp(home: ChatScreen(settings: settings)));
+
+    await tester.tap(find.byType(TextField));
+    await tester.pump();
+
+    expect(tester.testTextInput.isVisible, isTrue);
+
+    await tester.tap(find.text('当前场景：${settings.activeScene.name}'));
+    await tester.pump();
+
+    expect(tester.testTextInput.isVisible, isFalse);
+  });
 }
