@@ -45,6 +45,57 @@ void main() {
     }
   });
 
+  test('OpenRouter exposes OpenAI transcription models', () {
+    final openrouter = findProvider('openrouter')!;
+
+    expect(
+      openrouter.dialects[Capability.stt],
+      ApiDialect.openrouterTranscribe,
+    );
+    for (final modelId in [
+      'openai/gpt-4o-mini-transcribe',
+      'openai/gpt-4o-transcribe',
+    ]) {
+      final model = openrouter.findModel(modelId)!;
+      expect(model.supports(Capability.stt), isTrue, reason: modelId);
+      expect(model.sttTransport, SttTransport.batchUpload, reason: modelId);
+    }
+  });
+
+  test('OpenRouter STT sends base64 JSON audio payload', () async {
+    final audio = await File(
+      '${Directory.systemTemp.path}/openrouter-stt.wav',
+    ).writeAsBytes([1, 2, 3]);
+    late Map<String, dynamic> payload;
+
+    final client = MockClient((request) async {
+      payload = jsonDecode(request.body) as Map<String, dynamic>;
+      expect(request.headers['Authorization'], 'Bearer key');
+      expect(request.headers['Content-Type'], contains('application/json'));
+      return http.Response(jsonEncode({'text': 'hello world'}), 200);
+    });
+
+    final text = await SttService().transcribe(
+      filePath: audio.path,
+      format: 'wav',
+      request: const SttRequest(
+        dialect: ApiDialect.openrouterTranscribe,
+        baseUrl: 'https://openrouter.ai/api/v1',
+        modelId: 'openai/gpt-4o-transcribe',
+        creds: {CredentialField.apiKey: 'key'},
+      ),
+      client: client,
+    );
+
+    expect(text, 'hello world');
+    expect(payload['model'], 'openai/gpt-4o-transcribe');
+    final inputAudio = payload['input_audio'] as Map<String, dynamic>;
+    expect(inputAudio['format'], 'wav');
+    expect(inputAudio['data'], base64Encode([1, 2, 3]));
+
+    await audio.delete();
+  });
+
   test('xAI Grok Voice TTS is available directly and via OpenRouter', () {
     final xai = findProvider('xai')!;
     expect(xai.dialects[Capability.tts], ApiDialect.xaiSpeech);

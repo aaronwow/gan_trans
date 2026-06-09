@@ -66,6 +66,16 @@ void main() {
     expect(settings.relayProvider, isNull);
   });
 
+  test('fresh install uses response limit defaults', () async {
+    SharedPreferences.setMockInitialValues({});
+
+    final settings = AppSettings();
+    await settings.load();
+
+    expect(settings.llmTimeoutSeconds, 15);
+    expect(settings.historyContextCount, 0);
+  });
+
   test('correction and translation are always enabled', () async {
     SharedPreferences.setMockInitialValues({
       'correction_enabled': false,

@@ -50,6 +50,8 @@ class SttService {
           return await _gemini(filePath, format, request, c, timeout);
         case ApiDialect.openaiTranscribe:
           return await _openAi(filePath, request, c, timeout);
+        case ApiDialect.openrouterTranscribe:
+          return await _openRouter(filePath, format, request, c, timeout);
         case ApiDialect.volcSttFlash:
           return await _volcFlash(filePath, format, request, c, timeout);
         case ApiDialect.elevenlabsScribe:
@@ -141,6 +143,43 @@ class SttService {
       throw HttpException('OpenAI STT failed: ${streamed.statusCode} $body');
     }
     final data = jsonDecode(body) as Map<String, dynamic>;
+    return (data['text'] as String? ?? '').trim();
+  }
+
+  Future<String> _openRouter(
+    String filePath,
+    String format,
+    SttRequest req,
+    http.Client client,
+    Duration timeout,
+  ) async {
+    final apiKey = req.creds[CredentialField.apiKey] ?? '';
+    if (apiKey.isEmpty) {
+      throw StateError('OpenRouter API key is not set.');
+    }
+    final endpoint = req.baseUrl.trim().isEmpty
+        ? 'https://openrouter.ai/api/v1/audio/transcriptions'
+        : '${req.baseUrl.replaceAll(RegExp(r'/+$'), '')}/audio/transcriptions';
+    final bytes = await File(filePath).readAsBytes();
+    final payload = {
+      'model': req.modelId,
+      'input_audio': {'data': base64Encode(bytes), 'format': format},
+    };
+    final resp = await client
+        .post(
+          Uri.parse(endpoint),
+          headers: {
+            'Authorization': 'Bearer $apiKey',
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode(payload),
+        )
+        .timeout(timeout);
+    final bodyStr = utf8.decode(resp.bodyBytes);
+    if (resp.statusCode >= 400) {
+      throw HttpException('OpenRouter STT failed: ${resp.statusCode} $bodyStr');
+    }
+    final data = jsonDecode(bodyStr) as Map<String, dynamic>;
     return (data['text'] as String? ?? '').trim();
   }
 

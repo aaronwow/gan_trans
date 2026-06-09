@@ -174,9 +174,9 @@ class AppSettings extends ChangeNotifier {
   double vadThresholdLevel = 2.0;
   double minRecordSeconds = 0.5;
   int sttTimeoutSeconds = 10;
-  int llmTimeoutSeconds = 10;
+  int llmTimeoutSeconds = 15;
   int ttsTimeoutSeconds = 10;
-  int historyContextCount = 3;
+  int historyContextCount = 0;
   bool aecEnabled = true;
 
   /// Inside continuous mode: when true the mic stays open during TTS playback
@@ -342,9 +342,9 @@ class AppSettings extends ChangeNotifier {
     vadThresholdLevel = p.getDouble(_kVadThreshold) ?? 2.0;
     minRecordSeconds = p.getDouble(_kMinRecordSeconds) ?? 0.5;
     sttTimeoutSeconds = p.getInt(_kSttTimeout) ?? 10;
-    llmTimeoutSeconds = p.getInt(_kLlmTimeout) ?? 10;
+    llmTimeoutSeconds = p.getInt(_kLlmTimeout) ?? 15;
     ttsTimeoutSeconds = p.getInt(_kTtsTimeout) ?? 10;
-    historyContextCount = p.getInt(_kHistoryContextCount) ?? 3;
+    historyContextCount = p.getInt(_kHistoryContextCount) ?? 0;
     aecEnabled = p.getBool(_kAecEnabled) ?? true;
     continuousFullDuplex = p.getBool(_kContinuousFullDuplex) ?? false;
     audioDirectChat = p.getBool(_kAudioDirectChat) ?? false;

@@ -22,6 +22,7 @@ enum ApiDialect {
   geminiChat, // POST {baseUrl}/models/{model}:generateContent?key=
   geminiSpeech, // POST {baseUrl}/models/{model}:generateContent?key= (AUDIO)
   openaiTranscribe, // POST {baseUrl}/audio/transcriptions (multipart)
+  openrouterTranscribe, // POST {baseUrl}/audio/transcriptions (JSON base64)
   openaiSpeech, // POST {baseUrl}/audio/speech
   xaiSpeech, // POST {baseUrl}/tts
   elevenlabsSpeech, // POST {baseUrl}/text-to-speech/{voice_id}
@@ -173,18 +174,16 @@ const _openAi = ProviderSpec(
       inputs: {Modality.text, Modality.image},
     ),
     ModelSpec(
-      id: 'gpt-audio',
-      label: 'gpt-audio (text + audio)',
+      id: 'gpt-5.4-mini',
+      label: 'gpt-5.4-mini',
       caps: {Capability.chat},
-      inputs: {Modality.text, Modality.audio, Modality.image},
-      supportsDirectAudioTranslate: true,
+      inputs: {Modality.text, Modality.image},
     ),
     ModelSpec(
-      id: 'gpt-audio-mini',
-      label: 'gpt-audio-mini (text + audio)',
+      id: 'gpt-5.4-nano',
+      label: 'gpt-5.4-nano',
       caps: {Capability.chat},
-      inputs: {Modality.text, Modality.audio, Modality.image},
-      supportsDirectAudioTranslate: true,
+      inputs: {Modality.text, Modality.image},
     ),
     ModelSpec(
       id: 'gpt-4o-audio-preview',
@@ -314,6 +313,7 @@ const _openRouter = ProviderSpec(
   baseUrl: 'https://openrouter.ai/api/v1',
   dialects: {
     Capability.chat: ApiDialect.openaiChat,
+    Capability.stt: ApiDialect.openrouterTranscribe,
     Capability.tts: ApiDialect.openaiSpeech,
   },
   credentials: [CredentialField.apiKey],
@@ -326,11 +326,6 @@ const _openRouter = ProviderSpec(
     ModelSpec(
       id: 'deepseek/deepseek-v4-flash',
       label: 'DeepSeek V4 Flash',
-      caps: {Capability.chat},
-    ),
-    ModelSpec(
-      id: 'deepseek/deepseek-v3.2',
-      label: 'DeepSeek V3.2',
       caps: {Capability.chat},
     ),
     ModelSpec(
@@ -381,6 +376,12 @@ const _openRouter = ProviderSpec(
       inputs: {Modality.text, Modality.image},
     ),
     ModelSpec(
+      id: 'openai/gpt-5.4-nano',
+      label: 'GPT-5.4 Nano',
+      caps: {Capability.chat},
+      inputs: {Modality.text, Modality.image},
+    ),
+    ModelSpec(
       id: 'openai/gpt-5-chat',
       label: 'GPT-5 Chat',
       caps: {Capability.chat},
@@ -411,22 +412,22 @@ const _openRouter = ProviderSpec(
       inputs: {Modality.text, Modality.image},
     ),
     ModelSpec(
-      id: 'openai/gpt-audio',
-      label: 'GPT Audio',
-      caps: {Capability.chat},
-      inputs: {Modality.text, Modality.audio},
-    ),
-    ModelSpec(
-      id: 'openai/gpt-audio-mini',
-      label: 'GPT Audio Mini',
-      caps: {Capability.chat},
-      inputs: {Modality.text, Modality.audio},
-    ),
-    ModelSpec(
       id: 'openai/gpt-4o-audio-preview',
       label: 'GPT-4o audio preview',
       caps: {Capability.chat},
       inputs: {Modality.text, Modality.audio},
+    ),
+    ModelSpec(
+      id: 'openai/gpt-4o-mini-transcribe',
+      label: 'GPT-4o mini transcribe',
+      caps: {Capability.stt},
+      sttTransport: SttTransport.batchUpload,
+    ),
+    ModelSpec(
+      id: 'openai/gpt-4o-transcribe',
+      label: 'GPT-4o transcribe',
+      caps: {Capability.stt},
+      sttTransport: SttTransport.batchUpload,
     ),
     // xAI Grok (non-reasoning variants only)
     ModelSpec(
