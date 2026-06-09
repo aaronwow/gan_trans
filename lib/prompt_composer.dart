@@ -43,7 +43,7 @@ class PromptComposer {
         ? '$sceneText。'
         : '';
     final task = options.translationEnabled
-        ? '如果输入是$a，翻译成$b；如果输入是$b，翻译成$a。'
+        ? '判断本次最新输入的主要语言：如果输入是$a，必须翻译成$b；如果输入是$b，必须翻译成$a。禁止把$a输入输出为$a，也禁止把$b输入输出为$b。'
         : '修正输入文字。';
     final outputRule = options.translationEnabled
         ? '只输出最终翻译后的内容，不要包含原文、解释、标签、引号、Markdown 或任何额外文字。'
@@ -59,7 +59,7 @@ class PromptComposer {
         return '用户输入的文字是STT转换的结果，$scene$task$outputRule';
       case PromptIntent.imageOcrAndTranslate:
         final imageTask = options.translationEnabled
-            ? '如果原文是$a，翻译成$b；如果原文是$b，翻译成$a。'
+            ? '判断原文的主要语言：如果原文是$a，必须翻译成$b；如果原文是$b，必须翻译成$a。禁止同语言输出。'
             : '修正原文文字（如有错别字或OCR噪声）。';
         return '$scene你将看到一张图片。请严格分两段输出：\n'
             '第一段：逐字提取图片中的全部文字，保留原始换行和段落结构，不要增删、不要解释、不要使用 Markdown。\n'

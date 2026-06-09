@@ -31,8 +31,8 @@ class ProviderModelPicker extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final providers = providersFor(cap).toList();
-    final selected = findProvider(providerId);
+    final providers = settings.providersFor(cap).toList();
+    final selected = settings.findProvider(providerId);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [

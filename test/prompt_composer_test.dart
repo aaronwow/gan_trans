@@ -16,7 +16,8 @@ void main() {
 
     expect(prompt, contains('用户输入的文字是STT转换的结果'));
     expect(prompt, contains('餐厅点餐'));
-    expect(prompt, contains('如果输入是中文，翻译成英语'));
+    expect(prompt, contains('如果输入是中文，必须翻译成英语'));
+    expect(prompt, contains('禁止把中文输入输出为中文'));
   });
 
   test('direct audio JSON prompts omit STT framing and request transcript', () {

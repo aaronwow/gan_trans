@@ -14,6 +14,7 @@ const _doubaoTtsUrl =
 
 class TtsRequest {
   final ApiDialect dialect;
+  final String baseUrl;
   final String modelId;
   final String voice;
   final Map<CredentialField, String> creds;
@@ -21,6 +22,7 @@ class TtsRequest {
 
   const TtsRequest({
     required this.dialect,
+    this.baseUrl = '',
     required this.modelId,
     required this.voice,
     required this.creds,
@@ -28,15 +30,85 @@ class TtsRequest {
   });
 }
 
+class _TtsAudio {
+  final Uint8List bytes;
+  final String mimeType;
+
+  const _TtsAudio(this.bytes, this.mimeType);
+}
+
+class _TtsCacheKey {
+  final String text;
+  final ApiDialect dialect;
+  final String baseUrl;
+  final String modelId;
+  final String voice;
+  final int volcSpeechRate;
+
+  const _TtsCacheKey({
+    required this.text,
+    required this.dialect,
+    required this.baseUrl,
+    required this.modelId,
+    required this.voice,
+    required this.volcSpeechRate,
+  });
+
+  factory _TtsCacheKey.from(String text, TtsRequest request) => _TtsCacheKey(
+    text: text,
+    dialect: request.dialect,
+    baseUrl: request.baseUrl.replaceAll(RegExp(r'/+$'), ''),
+    modelId: request.modelId,
+    voice: request.voice,
+    volcSpeechRate: request.volcSpeechRate,
+  );
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is _TtsCacheKey &&
+          text == other.text &&
+          dialect == other.dialect &&
+          baseUrl == other.baseUrl &&
+          modelId == other.modelId &&
+          voice == other.voice &&
+          volcSpeechRate == other.volcSpeechRate;
+
+  @override
+  int get hashCode =>
+      Object.hash(text, dialect, baseUrl, modelId, voice, volcSpeechRate);
+}
+
+Map<String, dynamic> xaiSpeechPayload({
+  required String text,
+  required String voice,
+}) {
+  return {
+    'text': text,
+    'voice_id': voice.isEmpty ? 'eve' : voice,
+    'language': 'auto',
+    'output_format': {'codec': 'mp3', 'sample_rate': 24000, 'bit_rate': 128000},
+  };
+}
+
 class TtsService {
+  static const int _maxCachedAudio = 24;
+
   final AudioPlayer _player = AudioPlayer();
+  final Future<void> Function(Uint8List bytes, String mimeType)? _playAudio;
+  final Map<_TtsCacheKey, _TtsAudio> _audioCache = {};
+  final Map<_TtsCacheKey, Future<_TtsAudio>> _inFlight = {};
 
   final _playingController = StreamController<bool>.broadcast();
   Stream<bool> get playingStream => _playingController.stream;
   bool _playing = false;
+  bool _disposed = false;
   bool get isPlaying => _playing;
 
-  TtsService() {
+  TtsService({
+    @visibleForTesting
+    Future<void> Function(Uint8List bytes, String mimeType)? playAudio,
+  }) : _playAudio = playAudio {
     _player.onPlayerStateChanged.listen((st) {
       if (st == PlayerState.playing) {
         _setPlaying(true);
@@ -75,30 +147,80 @@ class TtsService {
     final c = client ?? http.Client();
     final owned = client == null;
     try {
-      switch (request.dialect) {
-        case ApiDialect.geminiSpeech:
-          await _speakGemini(text, request, c, timeout);
-          return;
-        case ApiDialect.openaiSpeech:
-          await _speakOpenAi(text, request, c, timeout);
-          return;
-        case ApiDialect.elevenlabsSpeech:
-          await _speakElevenLabs(text, request, c, timeout);
-          return;
-        case ApiDialect.volcTtsDoubao:
-          await _speakDoubao(text, request, c, timeout);
-          return;
-        default:
-          throw StateError(
-            'TtsService: unsupported dialect ${request.dialect}',
-          );
-      }
+      final audio = await _audioFor(
+        text: text,
+        request: request,
+        client: c,
+        timeout: timeout,
+      );
+      await _playAudioBytes(audio.bytes, audio.mimeType);
     } finally {
       if (owned) c.close();
     }
   }
 
-  Future<void> _speakOpenAi(
+  Future<void> _playAudioBytes(Uint8List bytes, String mimeType) {
+    final override = _playAudio;
+    if (override != null) return override(bytes, mimeType);
+    return _player.play(BytesSource(bytes, mimeType: mimeType));
+  }
+
+  Future<_TtsAudio> _audioFor({
+    required String text,
+    required TtsRequest request,
+    required http.Client client,
+    required Duration timeout,
+  }) async {
+    final key = _TtsCacheKey.from(text, request);
+    final cached = _audioCache[key];
+    if (cached != null) return cached;
+
+    final pending = _inFlight[key];
+    if (pending != null) return pending;
+
+    final future = _fetchAudio(text, request, client, timeout);
+    _inFlight[key] = future;
+    try {
+      final audio = await future;
+      _rememberAudio(key, audio);
+      return audio;
+    } finally {
+      _inFlight.remove(key);
+    }
+  }
+
+  Future<_TtsAudio> _fetchAudio(
+    String text,
+    TtsRequest request,
+    http.Client client,
+    Duration timeout,
+  ) async {
+    switch (request.dialect) {
+      case ApiDialect.geminiSpeech:
+        return _fetchGeminiAudio(text, request, client, timeout);
+      case ApiDialect.openaiSpeech:
+        return _fetchOpenAiAudio(text, request, client, timeout);
+      case ApiDialect.xaiSpeech:
+        return _fetchXAiAudio(text, request, client, timeout);
+      case ApiDialect.elevenlabsSpeech:
+        return _fetchElevenLabsAudio(text, request, client, timeout);
+      case ApiDialect.volcTtsDoubao:
+        return _fetchDoubaoAudio(text, request, client, timeout);
+      default:
+        throw StateError('TtsService: unsupported dialect ${request.dialect}');
+    }
+  }
+
+  void _rememberAudio(_TtsCacheKey key, _TtsAudio audio) {
+    if (_disposed) return;
+    _audioCache.remove(key);
+    _audioCache[key] = audio;
+    while (_audioCache.length > _maxCachedAudio) {
+      _audioCache.remove(_audioCache.keys.first);
+    }
+  }
+
+  Future<_TtsAudio> _fetchOpenAiAudio(
     String text,
     TtsRequest req,
     http.Client client,
@@ -106,11 +228,14 @@ class TtsService {
   ) async {
     final apiKey = req.creds[CredentialField.apiKey] ?? '';
     if (apiKey.isEmpty) {
-      throw Exception('OpenAI API key is empty — set it in Settings.');
+      throw Exception('API key is empty — set it in Settings.');
     }
+    final endpoint = req.baseUrl.trim().isEmpty
+        ? _openAiSpeechUrl
+        : '${req.baseUrl.replaceAll(RegExp(r'/+$'), '')}/audio/speech';
     final resp = await client
         .post(
-          Uri.parse(_openAiSpeechUrl),
+          Uri.parse(endpoint),
           headers: {
             'Content-Type': 'application/json',
             'Authorization': 'Bearer $apiKey',
@@ -126,12 +251,40 @@ class TtsService {
     if (resp.statusCode >= 400) {
       throw Exception('OpenAI TTS ${resp.statusCode}: ${resp.body}');
     }
-    await _player.play(
-      BytesSource(Uint8List.fromList(resp.bodyBytes), mimeType: 'audio/mpeg'),
+    return _TtsAudio(Uint8List.fromList(resp.bodyBytes), 'audio/mpeg');
+  }
+
+  Future<_TtsAudio> _fetchXAiAudio(
+    String text,
+    TtsRequest req,
+    http.Client client,
+    Duration timeout,
+  ) async {
+    final apiKey = req.creds[CredentialField.apiKey] ?? '';
+    if (apiKey.isEmpty) {
+      throw Exception('xAI API key is empty — set it in Settings.');
+    }
+    final endpoint = '${req.baseUrl.replaceAll(RegExp(r'/+$'), '')}/tts';
+    final resp = await client
+        .post(
+          Uri.parse(endpoint),
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer $apiKey',
+          },
+          body: jsonEncode(xaiSpeechPayload(text: text, voice: req.voice)),
+        )
+        .timeout(timeout);
+    if (resp.statusCode >= 400) {
+      throw Exception('xAI TTS ${resp.statusCode}: ${resp.body}');
+    }
+    return _TtsAudio(
+      Uint8List.fromList(resp.bodyBytes),
+      resp.headers['content-type'] ?? 'audio/mpeg',
     );
   }
 
-  Future<void> _speakElevenLabs(
+  Future<_TtsAudio> _fetchElevenLabsAudio(
     String text,
     TtsRequest req,
     http.Client client,
@@ -159,12 +312,10 @@ class TtsService {
     if (resp.statusCode >= 400) {
       throw Exception('ElevenLabs TTS ${resp.statusCode}: ${resp.body}');
     }
-    await _player.play(
-      BytesSource(Uint8List.fromList(resp.bodyBytes), mimeType: 'audio/mpeg'),
-    );
+    return _TtsAudio(Uint8List.fromList(resp.bodyBytes), 'audio/mpeg');
   }
 
-  Future<void> _speakGemini(
+  Future<_TtsAudio> _fetchGeminiAudio(
     String text,
     TtsRequest req,
     http.Client client,
@@ -217,10 +368,10 @@ class TtsService {
     }
     final pcm = base64Decode(audioB64);
     final wav = _wavFromPcm16(pcm, sampleRate: 24000, channels: 1);
-    await _player.play(BytesSource(wav, mimeType: 'audio/wav'));
+    return _TtsAudio(wav, 'audio/wav');
   }
 
-  Future<void> _speakDoubao(
+  Future<_TtsAudio> _fetchDoubaoAudio(
     String text,
     TtsRequest req,
     http.Client client,
@@ -289,9 +440,7 @@ class TtsService {
     if (chunks.isEmpty) {
       throw Exception('Doubao TTS: no audio data returned');
     }
-    await _player.play(
-      BytesSource(Uint8List.fromList(chunks), mimeType: 'audio/mpeg'),
-    );
+    return _TtsAudio(Uint8List.fromList(chunks), 'audio/mpeg');
   }
 
   String? _extractGeminiAudio(Map<String, dynamic> data) {
@@ -345,6 +494,9 @@ class TtsService {
   }
 
   void dispose() {
+    _disposed = true;
+    _audioCache.clear();
+    _inFlight.clear();
     _playingController.close();
     _player.dispose();
   }

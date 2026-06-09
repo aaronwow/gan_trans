@@ -2,12 +2,12 @@ part of 'chat_screen.dart';
 
 // ---------------- Widgets ----------------
 
-class _PillButton extends StatelessWidget {
+class _ScenePill extends StatelessWidget {
   final IconData icon;
   final String label;
   final VoidCallback onTap;
 
-  const _PillButton({
+  const _ScenePill({
     required this.icon,
     required this.label,
     required this.onTap,
@@ -16,31 +16,92 @@ class _PillButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(24),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        decoration: BoxDecoration(
-          color: cs.primaryContainer,
-          borderRadius: BorderRadius.circular(24),
-        ),
-        child: Row(
-          children: [
-            Icon(icon, size: 18, color: cs.onPrimaryContainer),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                label,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: cs.onPrimaryContainer,
-                  fontWeight: FontWeight.w600,
+    return Tooltip(
+      message: '选择场景提示词',
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(24),
+        child: Container(
+          height: 42,
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          decoration: BoxDecoration(
+            color: cs.primaryContainer,
+            borderRadius: BorderRadius.circular(24),
+          ),
+          child: Row(
+            children: [
+              Icon(icon, size: 18, color: cs.onPrimaryContainer),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  label,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: cs.onPrimaryContainer,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               ),
-            ),
-            Icon(Icons.expand_more, size: 18, color: cs.onPrimaryContainer),
-          ],
+              Icon(Icons.expand_more, size: 18, color: cs.onPrimaryContainer),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _LanguagePill extends StatelessWidget {
+  final String label;
+  final bool enabled;
+  final VoidCallback onTap;
+
+  const _LanguagePill({
+    required this.label,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final bg = enabled ? cs.primaryContainer : cs.surfaceContainerHighest;
+    final fg = enabled ? cs.onPrimaryContainer : cs.onSurfaceVariant;
+    return Tooltip(
+      message: '调整翻译语言',
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(18),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          height: 36,
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: enabled ? cs.primary : cs.outlineVariant),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.language, size: 16, color: fg),
+              const SizedBox(width: 5),
+              Flexible(
+                child: Text(
+                  label,
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
+                  style: TextStyle(
+                    color: fg,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 3),
+              Icon(Icons.edit_outlined, size: 13, color: fg),
+            ],
+          ),
         ),
       ),
     );
@@ -138,109 +199,6 @@ class _RoutingToggle extends StatelessWidget {
               ),
             ],
           ),
-        ),
-      ),
-    );
-  }
-}
-
-class _TranslationRoutingToggle extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final String languages;
-  final bool enabled;
-  final VoidCallback onToggle;
-  final VoidCallback onLanguagesTap;
-
-  const _TranslationRoutingToggle({
-    required this.icon,
-    required this.label,
-    required this.languages,
-    required this.enabled,
-    required this.onToggle,
-    required this.onLanguagesTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final bg = enabled ? cs.primaryContainer : cs.surfaceContainerHighest;
-    final fg = enabled ? cs.onPrimaryContainer : cs.onSurfaceVariant;
-    final divider = fg.withValues(alpha: 0.24);
-    return Tooltip(
-      message: '$label ${enabled ? "开启" : "关闭"}',
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 160),
-        height: 42,
-        decoration: BoxDecoration(
-          color: bg,
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: enabled ? cs.primary : cs.outlineVariant),
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: Row(
-          children: [
-            Expanded(
-              child: InkWell(
-                onTap: onToggle,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(icon, size: 16, color: fg),
-                      const SizedBox(width: 5),
-                      Flexible(
-                        child: Text(
-                          label,
-                          overflow: TextOverflow.ellipsis,
-                          maxLines: 1,
-                          style: TextStyle(
-                            color: fg,
-                            fontSize: 12,
-                            fontWeight: enabled
-                                ? FontWeight.w800
-                                : FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            Container(width: 1, height: 24, color: divider),
-            Expanded(
-              child: Tooltip(
-                message: '调整翻译语言',
-                child: InkWell(
-                  onTap: onLanguagesTap,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Flexible(
-                          child: Text(
-                            languages,
-                            overflow: TextOverflow.ellipsis,
-                            maxLines: 1,
-                            style: TextStyle(
-                              color: fg,
-                              fontSize: 11,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 3),
-                        Icon(Icons.edit_outlined, size: 13, color: fg),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ],
         ),
       ),
     );

@@ -1,8 +1,11 @@
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'catalog.dart';
 import 'prompt_composer.dart';
+import 'relay_catalog.dart';
 import 'scenes.dart';
 import 'stt_service.dart';
 import 'tts_service.dart';
@@ -37,6 +40,10 @@ class AppSettings extends ChangeNotifier {
   // Per-provider credentials: cred__<providerId>__<fieldName>
   static String _credKey(String providerId, CredentialField f) =>
       'cred__${providerId}__${f.name}';
+
+  static const _kRelayBaseUrl = 'relay_base_url';
+  static const _kRelayCatalogJson = 'relay_catalog_json';
+  static const _kRelayCatalogFetchedAt = 'relay_catalog_fetched_at';
 
   static const _kChatProvider = 'chat_provider_id';
   static const _kChatModel = 'chat_model_id';
@@ -97,6 +104,27 @@ class AppSettings extends ChangeNotifier {
   /// providerId → (CredentialField → value)
   final Map<String, Map<CredentialField, String>> _credentials = {};
 
+  ProviderSpec? _relayProvider;
+  String relayBaseUrl = '';
+  String? relayCatalogError;
+  DateTime? relayCatalogFetchedAt;
+
+  ProviderSpec? get relayProvider => _relayProvider;
+
+  List<ProviderSpec> get catalog => [...kCatalog, ?_relayProvider];
+
+  ProviderSpec? findProvider(String? id) {
+    if (id == null) return null;
+    if (id == kRelayProviderId) return _relayProvider;
+    for (final p in kCatalog) {
+      if (p.id == id) return p;
+    }
+    return null;
+  }
+
+  Iterable<ProviderSpec> providersFor(Capability c) =>
+      catalog.where((p) => p.hasCapability(c));
+
   Map<CredentialField, String> credentialsFor(String providerId) =>
       _credentials[providerId] ?? const {};
 
@@ -127,6 +155,7 @@ class AppSettings extends ChangeNotifier {
   String ttsVoice = '';
   bool ttsAutoSpeak = true;
   int ttsVolcSpeechRate = 0;
+
   /// Optional override for image input requests. When null, image messages go
   /// to the chat model (which must itself accept images).
   String? imageProviderId;
@@ -136,8 +165,8 @@ class AppSettings extends ChangeNotifier {
   VoiceMode voiceMode = VoiceMode.pushToTalk;
   List<Scene> scenes = [];
   String activeSceneId = kDefaultSceneId;
-  bool correctionEnabled = false;
-  bool translationEnabled = false;
+  bool correctionEnabled = true;
+  bool translationEnabled = true;
   String translationLangA = '中文';
   String translationLangB = '印尼语';
   double vadPauseSeconds = 2.0;
@@ -181,6 +210,31 @@ class AppSettings extends ChangeNotifier {
   Future<void> load() async {
     final p = await SharedPreferences.getInstance();
 
+    relayBaseUrl = normalizeRelayBaseUrl(p.getString(_kRelayBaseUrl) ?? '');
+    final relayJson = p.getString(_kRelayCatalogJson);
+    if (relayBaseUrl.isEmpty) {
+      relayCatalogFetchedAt = null;
+    } else {
+      final fetchedAtMillis = p.getInt(_kRelayCatalogFetchedAt);
+      relayCatalogFetchedAt = fetchedAtMillis == null
+          ? null
+          : DateTime.fromMillisecondsSinceEpoch(fetchedAtMillis);
+    }
+    if (relayBaseUrl.isNotEmpty &&
+        relayJson != null &&
+        relayJson.trim().isNotEmpty) {
+      try {
+        _relayProvider = relayProviderFromJson(
+          relayBaseUrl,
+          jsonDecode(relayJson),
+        );
+        relayCatalogError = null;
+      } catch (e) {
+        _relayProvider = null;
+        relayCatalogError = 'Cached relay catalog is invalid: $e';
+      }
+    }
+
     // Load credentials for every catalog provider, falling back to legacy keys.
     for (final provider in kCatalog) {
       final m = <CredentialField, String>{};
@@ -190,6 +244,10 @@ class AppSettings extends ChangeNotifier {
       }
       _credentials[provider.id] = m;
     }
+    _credentials[kRelayProviderId] = {
+      CredentialField.apiKey:
+          p.getString(_credKey(kRelayProviderId, CredentialField.apiKey)) ?? '',
+    };
 
     // Chat provider/model — fall back to legacy enum (0=openai, 1=gemini).
     chatProviderId =
@@ -267,10 +325,16 @@ class AppSettings extends ChangeNotifier {
       activeSceneId = scenes.first.id;
     }
 
-    correctionEnabled = p.getBool(_kCorrectionEnabled) ?? true;
-    translationEnabled = p.getBool(_kTranslationEnabled) ?? false;
+    correctionEnabled = true;
+    translationEnabled = true;
+    await p.setBool(_kCorrectionEnabled, true);
+    await p.setBool(_kTranslationEnabled, true);
     translationLangA = p.getString(_kTranslationLangA) ?? '中文';
     translationLangB = p.getString(_kTranslationLangB) ?? '印尼语';
+    if (translationLangA == translationLangB) {
+      translationLangB = _firstDifferentLanguage(translationLangA);
+      await p.setString(_kTranslationLangB, translationLangB);
+    }
 
     final vp = p.get(_kVadPause);
     vadPauseSeconds = vp is double ? vp : (vp is int ? vp.toDouble() : 2.0);
@@ -516,6 +580,61 @@ class AppSettings extends ChangeNotifier {
 
   // ---- Setters ----
 
+  Future<void> setRelayBaseUrl(String value) async {
+    relayBaseUrl = normalizeRelayBaseUrl(value);
+    final p = await _prefs;
+    if (relayBaseUrl.isEmpty) {
+      _relayProvider = null;
+      relayCatalogError = null;
+      relayCatalogFetchedAt = null;
+      await p.setString(_kRelayBaseUrl, relayBaseUrl);
+      await p.remove(_kRelayCatalogJson);
+      await p.remove(_kRelayCatalogFetchedAt);
+      _ensureValid(Capability.chat);
+      _ensureValid(Capability.stt);
+      _ensureValid(Capability.tts);
+      _ensureImageValid();
+      notifyListeners();
+      return;
+    }
+    if (_relayProvider != null) {
+      _relayProvider = ProviderSpec(
+        id: _relayProvider!.id,
+        name: _relayProvider!.name,
+        baseUrl: relayBaseUrl,
+        dialects: _relayProvider!.dialects,
+        credentials: _relayProvider!.credentials,
+        models: _relayProvider!.models,
+      );
+    }
+    await p.setString(_kRelayBaseUrl, relayBaseUrl);
+    notifyListeners();
+  }
+
+  Future<void> refreshRelayCatalog() async {
+    if (relayBaseUrl.trim().isEmpty) {
+      throw ArgumentError('Relay Base URL is required');
+    }
+    final p = await _prefs;
+    final raw = await fetchRelayCatalogJson(
+      relayBaseUrl,
+      apiKey: credential(kRelayProviderId, CredentialField.apiKey),
+    );
+    _relayProvider = relayProviderFromJson(relayBaseUrl, jsonDecode(raw));
+    relayCatalogError = null;
+    relayCatalogFetchedAt = DateTime.now();
+    await p.setString(_kRelayCatalogJson, raw);
+    await p.setInt(
+      _kRelayCatalogFetchedAt,
+      relayCatalogFetchedAt!.millisecondsSinceEpoch,
+    );
+    _ensureValid(Capability.chat);
+    _ensureValid(Capability.stt);
+    _ensureValid(Capability.tts);
+    _ensureImageValid();
+    notifyListeners();
+  }
+
   Future<void> setCredential(
     String providerId,
     CredentialField field,
@@ -563,7 +682,7 @@ class AppSettings extends ChangeNotifier {
   }
 
   /// Providers that have at least one chat model accepting images.
-  Iterable<ProviderSpec> imageProviders() => kCatalog.where(
+  Iterable<ProviderSpec> imageProviders() => catalog.where(
     (p) =>
         p.dialects.containsKey(Capability.chat) &&
         p.modelsFor(Capability.chat).any((m) => m.acceptsImage()),
@@ -797,28 +916,45 @@ class AppSettings extends ChangeNotifier {
     await (await _prefs).setString(_kActiveScene, activeSceneId);
   }
 
-  Future<void> setCorrectionEnabled(bool v) async {
-    correctionEnabled = v;
-    await (await _prefs).setBool(_kCorrectionEnabled, v);
+  Future<void> setCorrectionEnabled(bool _) async {
+    correctionEnabled = true;
+    await (await _prefs).setBool(_kCorrectionEnabled, true);
     notifyListeners();
   }
 
-  Future<void> setTranslationEnabled(bool v) async {
-    translationEnabled = v;
-    await (await _prefs).setBool(_kTranslationEnabled, v);
+  Future<void> setTranslationEnabled(bool _) async {
+    translationEnabled = true;
+    await (await _prefs).setBool(_kTranslationEnabled, true);
     notifyListeners();
   }
 
   Future<void> setTranslationLangA(String v) async {
     translationLangA = v;
-    await (await _prefs).setString(_kTranslationLangA, v);
+    if (translationLangA == translationLangB) {
+      translationLangB = _firstDifferentLanguage(translationLangA);
+    }
+    final p = await _prefs;
+    await p.setString(_kTranslationLangA, translationLangA);
+    await p.setString(_kTranslationLangB, translationLangB);
     notifyListeners();
   }
 
   Future<void> setTranslationLangB(String v) async {
     translationLangB = v;
-    await (await _prefs).setString(_kTranslationLangB, v);
+    if (translationLangA == translationLangB) {
+      translationLangA = _firstDifferentLanguage(translationLangB);
+    }
+    final p = await _prefs;
+    await p.setString(_kTranslationLangA, translationLangA);
+    await p.setString(_kTranslationLangB, translationLangB);
     notifyListeners();
+  }
+
+  String _firstDifferentLanguage(String language) {
+    return kTranslationLanguages.firstWhere(
+      (candidate) => candidate != language,
+      orElse: () => language == '中文' ? '英语' : '中文',
+    );
   }
 
   Future<void> setVadPause(double v) async {
@@ -895,6 +1031,7 @@ class AppSettings extends ChangeNotifier {
     if (dialect == null) return null;
     return SttRequest(
       dialect: dialect,
+      baseUrl: provider.baseUrl,
       modelId: sttModelId,
       creds: credentialsFor(pid),
     );
@@ -909,6 +1046,7 @@ class AppSettings extends ChangeNotifier {
     if (dialect == null) return null;
     return TtsRequest(
       dialect: dialect,
+      baseUrl: provider.baseUrl,
       modelId: ttsModelId,
       voice: ttsVoice,
       creds: credentialsFor(pid),
@@ -923,11 +1061,6 @@ class AppSettings extends ChangeNotifier {
   /// only when [includeScenePrompt] is true.
   String composedSystemPrompt() {
     final fused = audioDirectActive;
-    if (!correctionEnabled) {
-      return fused
-          ? '只转录用户音频内容，输出纯文本，不要修正、翻译、解释、添加标签、使用 Markdown 或包含任何时间戳/时间码。'
-          : '';
-    }
     return PromptComposer.compose(
       PromptOptions(
         intent: fused && audioDirectIncludeTranscript
@@ -935,7 +1068,7 @@ class AppSettings extends ChangeNotifier {
             : (fused
                   ? PromptIntent.directAudioTranslateOrCorrect
                   : PromptIntent.textTranslateOrCorrect),
-        translationEnabled: translationEnabled,
+        translationEnabled: true,
         translationLangA: translationLangA,
         translationLangB: translationLangB,
         scenePrompt: activeScene.prompt,

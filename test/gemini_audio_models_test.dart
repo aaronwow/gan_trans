@@ -3,27 +3,31 @@ import 'dart:io';
 
 import 'package:ai_chat/catalog.dart';
 import 'package:ai_chat/stt_service.dart';
+import 'package:ai_chat/tts_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
 void main() {
-  test('Google exposes Gemini STT and TTS models', () {
+  test('Google exposes the current Gemini STT-capable models', () {
     final google = findProvider('google')!;
 
     expect(google.dialects[Capability.stt], ApiDialect.geminiChat);
-    expect(google.dialects[Capability.tts], ApiDialect.geminiSpeech);
+    expect(google.dialects[Capability.tts], isNull);
 
-    final stt = google.findModel('gemini-3.1-flash-lite-preview')!;
-    expect(stt.supports(Capability.chat), isTrue);
-    expect(stt.supports(Capability.stt), isTrue);
-    expect(stt.acceptsAudio(), isTrue);
-    expect(stt.canTranslateAudioDirect, isTrue);
-    expect(stt.sttTransport, SttTransport.batchUpload);
-
-    final tts = google.findModel('gemini-3.1-flash-tts-preview')!;
-    expect(tts.supports(Capability.tts), isTrue);
-    expect(tts.voices.map((v) => v.id), contains('Kore'));
+    for (final modelId in [
+      'gemini-3-flash-preview',
+      'gemini-3.5-flash',
+      'gemini-3.1-flash-lite',
+      'gemini-flash-lite-latest',
+    ]) {
+      final model = google.findModel(modelId)!;
+      expect(model.supports(Capability.chat), isTrue, reason: modelId);
+      expect(model.supports(Capability.stt), isTrue, reason: modelId);
+      expect(model.acceptsAudio(), isTrue, reason: modelId);
+      expect(model.canTranslateAudioDirect, isTrue, reason: modelId);
+      expect(model.sttTransport, SttTransport.batchUpload, reason: modelId);
+    }
   });
 
   test('OpenRouter Gemini chat models expose direct audio translation', () {
@@ -31,16 +35,38 @@ void main() {
 
     for (final modelId in [
       'google/gemini-3-flash-preview',
-      'google/gemini-3.1-flash-lite-preview',
-      'google/gemini-2.5-pro',
-      'google/gemini-2.5-flash',
-      'google/gemini-2.0-flash-001',
+      'google/gemini-3.5-flash',
+      'google/gemini-3.1-flash-lite',
     ]) {
       final model = openrouter.findModel(modelId)!;
       expect(model.supports(Capability.chat), isTrue, reason: modelId);
       expect(model.acceptsAudio(), isTrue, reason: modelId);
       expect(model.canTranslateAudioDirect, isTrue, reason: modelId);
     }
+  });
+
+  test('xAI Grok Voice TTS is available directly and via OpenRouter', () {
+    final xai = findProvider('xai')!;
+    expect(xai.dialects[Capability.tts], ApiDialect.xaiSpeech);
+    final direct = xai.findModel('grok-voice-tts-1.0')!;
+    expect(direct.supports(Capability.tts), isTrue);
+    expect(direct.voices.map((v) => v.id), containsAll(['eve', 'ara', 'rex']));
+
+    final openrouter = findProvider('openrouter')!;
+    expect(openrouter.dialects[Capability.tts], ApiDialect.openaiSpeech);
+    final routed = openrouter.findModel('x-ai/grok-voice-tts-1.0')!;
+    expect(routed.supports(Capability.tts), isTrue);
+    expect(routed.voices.map((v) => v.id), containsAll(['eve', 'sal', 'leo']));
+  });
+
+  test('xAI TTS uses the official text and voice_id payload', () {
+    final payload = xaiSpeechPayload(text: 'hello', voice: 'ara');
+
+    expect(payload['text'], 'hello');
+    expect(payload['voice_id'], 'ara');
+    expect(payload['language'], 'auto');
+    expect(payload['output_format']['codec'], 'mp3');
+    expect(xaiSpeechPayload(text: 'hello', voice: '')['voice_id'], 'eve');
   });
 
   test('ElevenLabs exposes batch STT and TTS models only', () {
@@ -117,7 +143,7 @@ void main() {
       format: 'wav',
       request: const SttRequest(
         dialect: ApiDialect.geminiChat,
-        modelId: 'gemini-3.1-flash-lite-preview',
+        modelId: 'gemini-3.1-flash-lite',
         creds: {CredentialField.apiKey: 'key'},
       ),
       client: client,

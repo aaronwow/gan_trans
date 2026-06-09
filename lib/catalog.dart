@@ -23,6 +23,7 @@ enum ApiDialect {
   geminiSpeech, // POST {baseUrl}/models/{model}:generateContent?key= (AUDIO)
   openaiTranscribe, // POST {baseUrl}/audio/transcriptions (multipart)
   openaiSpeech, // POST {baseUrl}/audio/speech
+  xaiSpeech, // POST {baseUrl}/tts
   elevenlabsSpeech, // POST {baseUrl}/text-to-speech/{voice_id}
   volcSttFlash, // POST openspeech /api/v3/auc/bigmodel/recognize/flash
   volcTtsDoubao, // POST openspeech /api/v3/tts/unidirectional
@@ -125,6 +126,14 @@ const _openAiTtsVoices = [
   TtsVoice('onyx', 'onyx'),
   TtsVoice('sage', 'sage'),
   TtsVoice('shimmer', 'shimmer'),
+];
+
+const _xAiTtsVoices = [
+  TtsVoice('eve', 'Eve', lang: 'multilingual'),
+  TtsVoice('ara', 'Ara', lang: 'multilingual'),
+  TtsVoice('rex', 'Rex', lang: 'multilingual'),
+  TtsVoice('sal', 'Sal', lang: 'multilingual'),
+  TtsVoice('leo', 'Leo', lang: 'multilingual'),
 ];
 
 const _openAi = ProviderSpec(
@@ -232,40 +241,25 @@ const _openAi = ProviderSpec(
   ],
 );
 
-// ---- Google (Gemini direct) ----
+// ---- xAI ----
 
-const _geminiTtsVoices = [
-  TtsVoice('Zephyr', 'Zephyr - Bright'),
-  TtsVoice('Puck', 'Puck - Upbeat'),
-  TtsVoice('Charon', 'Charon - Informative'),
-  TtsVoice('Kore', 'Kore - Firm'),
-  TtsVoice('Fenrir', 'Fenrir - Excitable'),
-  TtsVoice('Leda', 'Leda - Youthful'),
-  TtsVoice('Orus', 'Orus - Firm'),
-  TtsVoice('Aoede', 'Aoede - Breezy'),
-  TtsVoice('Callirrhoe', 'Callirrhoe - Easy-going'),
-  TtsVoice('Autonoe', 'Autonoe - Bright'),
-  TtsVoice('Enceladus', 'Enceladus - Breathy'),
-  TtsVoice('Iapetus', 'Iapetus - Clear'),
-  TtsVoice('Umbriel', 'Umbriel - Easy-going'),
-  TtsVoice('Algieba', 'Algieba - Smooth'),
-  TtsVoice('Despina', 'Despina - Smooth'),
-  TtsVoice('Erinome', 'Erinome - Clear'),
-  TtsVoice('Algenib', 'Algenib - Gravelly'),
-  TtsVoice('Rasalgethi', 'Rasalgethi - Informative'),
-  TtsVoice('Laomedeia', 'Laomedeia - Upbeat'),
-  TtsVoice('Achernar', 'Achernar - Soft'),
-  TtsVoice('Alnilam', 'Alnilam - Firm'),
-  TtsVoice('Schedar', 'Schedar - Even'),
-  TtsVoice('Gacrux', 'Gacrux - Mature'),
-  TtsVoice('Pulcherrima', 'Pulcherrima - Forward'),
-  TtsVoice('Achird', 'Achird - Friendly'),
-  TtsVoice('Zubenelgenubi', 'Zubenelgenubi - Casual'),
-  TtsVoice('Vindemiatrix', 'Vindemiatrix - Gentle'),
-  TtsVoice('Sadachbia', 'Sadachbia - Lively'),
-  TtsVoice('Sadaltager', 'Sadaltager - Knowledgeable'),
-  TtsVoice('Sulafat', 'Sulafat - Warm'),
-];
+const _xai = ProviderSpec(
+  id: 'xai',
+  name: 'xAI',
+  baseUrl: 'https://api.x.ai/v1',
+  dialects: {Capability.tts: ApiDialect.xaiSpeech},
+  credentials: [CredentialField.apiKey],
+  models: [
+    ModelSpec(
+      id: 'grok-voice-tts-1.0',
+      label: 'Grok Voice TTS 1.0',
+      caps: {Capability.tts},
+      voices: _xAiTtsVoices,
+    ),
+  ],
+);
+
+// ---- Google (Gemini direct) ----
 
 const _google = ProviderSpec(
   id: 'google',
@@ -274,63 +268,40 @@ const _google = ProviderSpec(
   dialects: {
     Capability.chat: ApiDialect.geminiChat,
     Capability.stt: ApiDialect.geminiChat,
-    Capability.tts: ApiDialect.geminiSpeech,
   },
   credentials: [CredentialField.apiKey],
   models: [
     ModelSpec(
       id: 'gemini-3-flash-preview',
-      label: 'gemini-3-flash-preview',
+      label: 'Gemini 3 Flash',
       caps: {Capability.chat, Capability.stt},
       inputs: {Modality.text, Modality.audio, Modality.image},
       sttTransport: SttTransport.batchUpload,
       supportsDirectAudioTranslate: true,
     ),
     ModelSpec(
-      id: 'gemini-3.1-flash-lite-preview',
-      label: 'gemini-3.1-flash-lite-preview',
+      id: 'gemini-3.5-flash',
+      label: 'Gemini 3.5 Flash',
       caps: {Capability.chat, Capability.stt},
       inputs: {Modality.text, Modality.audio, Modality.image},
       sttTransport: SttTransport.batchUpload,
       supportsDirectAudioTranslate: true,
     ),
     ModelSpec(
-      id: 'gemini-2.5-pro',
-      label: 'gemini-2.5-pro',
+      id: 'gemini-3.1-flash-lite',
+      label: 'Gemini 3.1 Flash Lite',
       caps: {Capability.chat, Capability.stt},
       inputs: {Modality.text, Modality.audio, Modality.image},
       sttTransport: SttTransport.batchUpload,
       supportsDirectAudioTranslate: true,
     ),
     ModelSpec(
-      id: 'gemini-2.5-flash',
-      label: 'gemini-2.5-flash',
+      id: 'gemini-flash-lite-latest',
+      label: 'gemini-flash-lite-latest',
       caps: {Capability.chat, Capability.stt},
       inputs: {Modality.text, Modality.audio, Modality.image},
       sttTransport: SttTransport.batchUpload,
       supportsDirectAudioTranslate: true,
-    ),
-    ModelSpec(
-      id: 'gemini-2.0-flash',
-      label: 'gemini-2.0-flash',
-      caps: {Capability.chat, Capability.stt},
-      inputs: {Modality.text, Modality.audio, Modality.image},
-      sttTransport: SttTransport.batchUpload,
-      supportsDirectAudioTranslate: true,
-    ),
-    ModelSpec(
-      id: 'gemini-2.0-flash-lite',
-      label: 'gemini-2.0-flash-lite',
-      caps: {Capability.chat, Capability.stt},
-      inputs: {Modality.text, Modality.audio, Modality.image},
-      sttTransport: SttTransport.batchUpload,
-      supportsDirectAudioTranslate: true,
-    ),
-    ModelSpec(
-      id: 'gemini-3.1-flash-tts-preview',
-      label: 'gemini-3.1-flash-tts-preview',
-      caps: {Capability.tts},
-      voices: _geminiTtsVoices,
     ),
   ],
 );
@@ -341,7 +312,10 @@ const _openRouter = ProviderSpec(
   id: 'openrouter',
   name: 'OpenRouter',
   baseUrl: 'https://openrouter.ai/api/v1',
-  dialects: {Capability.chat: ApiDialect.openaiChat},
+  dialects: {
+    Capability.chat: ApiDialect.openaiChat,
+    Capability.tts: ApiDialect.openaiSpeech,
+  },
   credentials: [CredentialField.apiKey],
   // Curated set of currently popular, non-thinking chat models on OpenRouter.
   // Reasoning/thinking variants (R1, o-series, grok-*-mini, qwen-*-thinking,
@@ -366,55 +340,29 @@ const _openRouter = ProviderSpec(
     ),
     // Anthropic
     ModelSpec(
-      id: 'anthropic/claude-sonnet-4.6',
-      label: 'Claude Sonnet 4.6',
-      caps: {Capability.chat},
-      inputs: {Modality.text, Modality.image},
-    ),
-    ModelSpec(
       id: 'anthropic/claude-sonnet-4.5',
       label: 'Claude Sonnet 4.5',
-      caps: {Capability.chat},
-      inputs: {Modality.text, Modality.image},
-    ),
-    ModelSpec(
-      id: 'anthropic/claude-haiku-4.5',
-      label: 'Claude Haiku 4.5',
       caps: {Capability.chat},
       inputs: {Modality.text, Modality.image},
     ),
     // Google
     ModelSpec(
       id: 'google/gemini-3-flash-preview',
-      label: 'Gemini 3 Flash Preview',
+      label: 'Gemini 3 Flash',
       caps: {Capability.chat},
       inputs: {Modality.text, Modality.audio, Modality.image},
       supportsDirectAudioTranslate: true,
     ),
     ModelSpec(
-      id: 'google/gemini-3.1-flash-lite-preview',
-      label: 'Gemini 3.1 Flash Lite Preview',
+      id: 'google/gemini-3.5-flash',
+      label: 'Gemini 3.5 Flash',
       caps: {Capability.chat},
       inputs: {Modality.text, Modality.audio, Modality.image},
       supportsDirectAudioTranslate: true,
     ),
     ModelSpec(
-      id: 'google/gemini-2.5-pro',
-      label: 'Gemini 2.5 Pro',
-      caps: {Capability.chat},
-      inputs: {Modality.text, Modality.audio, Modality.image},
-      supportsDirectAudioTranslate: true,
-    ),
-    ModelSpec(
-      id: 'google/gemini-2.5-flash',
-      label: 'Gemini 2.5 Flash',
-      caps: {Capability.chat},
-      inputs: {Modality.text, Modality.audio, Modality.image},
-      supportsDirectAudioTranslate: true,
-    ),
-    ModelSpec(
-      id: 'google/gemini-2.0-flash-001',
-      label: 'Gemini 2.0 Flash',
+      id: 'google/gemini-3.1-flash-lite',
+      label: 'Gemini 3.1 Flash Lite',
       caps: {Capability.chat},
       inputs: {Modality.text, Modality.audio, Modality.image},
       supportsDirectAudioTranslate: true,
@@ -494,6 +442,12 @@ const _openRouter = ProviderSpec(
       inputs: {Modality.text, Modality.image},
     ),
     ModelSpec(id: 'x-ai/grok-3', label: 'Grok 3', caps: {Capability.chat}),
+    ModelSpec(
+      id: 'x-ai/grok-voice-tts-1.0',
+      label: 'Grok Voice TTS 1.0',
+      caps: {Capability.tts},
+      voices: _xAiTtsVoices,
+    ),
     // Meta Llama
     ModelSpec(
       id: 'meta-llama/llama-4-maverick',
@@ -507,17 +461,7 @@ const _openRouter = ProviderSpec(
       caps: {Capability.chat},
       inputs: {Modality.text, Modality.image},
     ),
-    ModelSpec(
-      id: 'meta-llama/llama-3.3-70b-instruct',
-      label: 'Llama 3.3 70B Instruct',
-      caps: {Capability.chat},
-    ),
     // Qwen (Instruct / non-thinking)
-    ModelSpec(
-      id: 'qwen/qwen3-max',
-      label: 'Qwen3 Max',
-      caps: {Capability.chat},
-    ),
     ModelSpec(
       id: 'qwen/qwen3-235b-a22b-2507',
       label: 'Qwen3 235B A22B Instruct 2507',
@@ -721,28 +665,10 @@ const _volcengine = ProviderSpec(
       caps: {Capability.stt},
       sttTransport: SttTransport.batchUpload,
     ),
-    ModelSpec(
-      id: 'volc.bigasr.auc',
-      label: 'volc.bigasr.auc (录音文件 1.0)',
-      caps: {Capability.stt},
-      sttTransport: SttTransport.batchUpload,
-    ),
-    ModelSpec(
-      id: 'volc.seedasr.auc',
-      label: 'volc.seedasr.auc (录音文件 2.0)',
-      caps: {Capability.stt},
-      sttTransport: SttTransport.batchUpload,
-    ),
     // TTS (Doubao seed-tts resource ids)
     ModelSpec(
       id: 'seed-tts-2.0',
       label: 'seed-tts-2.0 (字符版)',
-      caps: {Capability.tts},
-      voices: _doubaoVoices,
-    ),
-    ModelSpec(
-      id: 'seed-tts-1.0',
-      label: 'seed-tts-1.0 (字符版)',
       caps: {Capability.tts},
       voices: _doubaoVoices,
     ),
@@ -844,6 +770,7 @@ const _soniox = ProviderSpec(
 
 const kCatalog = <ProviderSpec>[
   _openAi,
+  _xai,
   _google,
   _openRouter,
   _volcengine,

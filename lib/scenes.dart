@@ -19,8 +19,8 @@ const kDefaultSceneId = 'default';
 List<Scene> defaultScenes() => [
       Scene(
         id: kDefaultSceneId,
-        name: '成人向',
-        prompt: '结合成人向的语境，修正文字',
+        name: '旅游',
+        prompt: '结合旅游场景的语境，修正文字',
       ),
       Scene(
         id: 'general',

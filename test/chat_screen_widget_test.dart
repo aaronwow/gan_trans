@@ -28,20 +28,20 @@ void main() {
     expect(find.byTooltip('清空对话'), findsOneWidget);
   });
 
-  testWidgets('language dialog warns when both languages are the same', (
-    tester,
-  ) async {
+  testWidgets('language picker keeps both languages different', (tester) async {
     final settings = await loadSettings();
     await settings.setTranslationLangA('中文');
     await settings.setTranslationLangB('中文');
 
     await tester.pumpWidget(MaterialApp(home: ChatScreen(settings: settings)));
 
-    await tester.tap(find.text('中文 ↔ 中文'));
+    expect(settings.translationLangA, isNot(settings.translationLangB));
+
+    await tester.tap(find.text('${settings.translationLangA} ↔ 中文'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 250));
 
-    expect(find.text('请选择两个不同的语言。'), findsOneWidget);
+    expect(find.text('翻译语言'), findsOneWidget);
   });
 
   testWidgets('empty text send uses clipboard text', (tester) async {

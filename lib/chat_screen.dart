@@ -254,7 +254,7 @@ class _ChatScreenState extends State<ChatScreen>
                           final pid = s.imageProviderId;
                           final provider = pid == null
                               ? null
-                              : findProvider(pid);
+                              : s.findProvider(pid);
                           final models = provider == null
                               ? const <ModelSpec>[]
                               : provider
@@ -354,7 +354,7 @@ class _ChatScreenState extends State<ChatScreen>
   }
 
   void _scrollToBottom() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    void scroll() {
       if (_scroll.hasClients) {
         _scroll.animateTo(
           _scroll.position.maxScrollExtent,
@@ -362,6 +362,11 @@ class _ChatScreenState extends State<ChatScreen>
           curve: Curves.easeOut,
         );
       }
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      scroll();
+      WidgetsBinding.instance.addPostFrameCallback((_) => scroll());
     });
   }
 
@@ -493,6 +498,7 @@ class _ChatScreenState extends State<ChatScreen>
     final s = widget.settings;
     final cs = Theme.of(context).colorScheme;
     final audioDirectActive = s.audioDirectActive;
+    final langsEqual = s.translationLangA == s.translationLangB;
     return Container(
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
       decoration: BoxDecoration(
@@ -505,7 +511,7 @@ class _ChatScreenState extends State<ChatScreen>
           Row(
             children: [
               Expanded(
-                child: _PillButton(
+                child: _ScenePill(
                   icon: Icons.theater_comedy_outlined,
                   label: s.activeScene.name,
                   onTap: _openScenes,
@@ -530,16 +536,10 @@ class _ChatScreenState extends State<ChatScreen>
             children: [
               Expanded(
                 flex: 2,
-                child: _TranslationRoutingToggle(
-                  icon: Icons.translate,
-                  label: '修正翻译',
-                  languages: '${s.translationLangA} ↔ ${s.translationLangB}',
-                  enabled: s.correctionEnabled,
-                  onToggle: () async {
-                    await s.setCorrectionEnabled(!s.correctionEnabled);
-                    if (mounted) setState(() {});
-                  },
-                  onLanguagesTap: _openTranslationLanguageDialog,
+                child: _LanguagePill(
+                  label: '${s.translationLangA} ↔ ${s.translationLangB}',
+                  enabled: !langsEqual,
+                  onTap: _openTranslationLanguageDialog,
                 ),
               ),
               const SizedBox(width: 8),
@@ -664,104 +664,76 @@ class _ChatScreenState extends State<ChatScreen>
   ) {
     return _sheetSection(
       icon: Icons.translate,
-      title: '修正+翻译',
-      subtitle: s.correctionEnabled ? '选择修正后输出的语言方向' : '修正和翻译已关闭',
-      trailing: Switch(
-        value: s.correctionEnabled,
-        onChanged: (v) async {
-          await s.setCorrectionEnabled(v);
-          setM(() {});
-          if (mounted) setState(() {});
-        },
-      ),
-      child: Opacity(
-        opacity: s.correctionEnabled ? 1 : 0.54,
-        child: Column(
-          children: [
-            _sheetSwitch(
-              title: '双向翻译',
-              subtitle: '关闭后只做文字修正。',
-              value: s.translationEnabled,
-              onChanged: !s.correctionEnabled || langsEqual
-                  ? null
-                  : (v) async {
-                      await s.setTranslationEnabled(v);
-                      setM(() {});
-                      if (mounted) setState(() {});
-                    },
-            ),
-            const SizedBox(height: 10),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Expanded(
-                  child: DropdownButtonFormField<String>(
-                    initialValue: s.translationLangA,
-                    isExpanded: true,
-                    decoration: const InputDecoration(
-                      labelText: '语言 A',
-                      isDense: true,
-                    ),
-                    items: kTranslationLanguages
-                        .map((l) => DropdownMenuItem(value: l, child: Text(l)))
-                        .toList(),
-                    onChanged: !s.correctionEnabled
-                        ? null
-                        : (v) {
-                            if (v == null) return;
-                            s.setTranslationLangA(v);
-                            setM(() {});
-                            if (mounted) setState(() {});
-                          },
+      title: '双向翻译',
+      subtitle: '修正和双向翻译始终开启，选择输出语言方向。',
+      child: Column(
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: DropdownButtonFormField<String>(
+                  initialValue: s.translationLangA,
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                    labelText: '语言 A',
+                    isDense: true,
                   ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  child: Icon(
-                    Icons.swap_horiz,
-                    size: 20,
-                    color: cs.onSurfaceVariant,
-                  ),
-                ),
-                Expanded(
-                  child: DropdownButtonFormField<String>(
-                    initialValue: s.translationLangB,
-                    isExpanded: true,
-                    decoration: const InputDecoration(
-                      labelText: '语言 B',
-                      isDense: true,
-                    ),
-                    items: kTranslationLanguages
-                        .map((l) => DropdownMenuItem(value: l, child: Text(l)))
-                        .toList(),
-                    onChanged: !s.correctionEnabled
-                        ? null
-                        : (v) {
-                            if (v == null) return;
-                            s.setTranslationLangB(v);
-                            setM(() {});
-                            if (mounted) setState(() {});
-                          },
-                  ),
-                ),
-              ],
-            ),
-            if (langsEqual)
-              Padding(
-                padding: const EdgeInsets.only(top: 10),
-                child: Row(
-                  children: [
-                    Icon(Icons.info_outline, size: 16, color: cs.error),
-                    const SizedBox(width: 6),
-                    Text(
-                      '请选择两个不同的语言。',
-                      style: TextStyle(color: cs.error, fontSize: 12),
-                    ),
-                  ],
+                  items: kTranslationLanguages
+                      .map((l) => DropdownMenuItem(value: l, child: Text(l)))
+                      .toList(),
+                  onChanged: (v) {
+                    if (v == null) return;
+                    s.setTranslationLangA(v);
+                    setM(() {});
+                    if (mounted) setState(() {});
+                  },
                 ),
               ),
-          ],
-        ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: Icon(
+                  Icons.swap_horiz,
+                  size: 20,
+                  color: cs.onSurfaceVariant,
+                ),
+              ),
+              Expanded(
+                child: DropdownButtonFormField<String>(
+                  initialValue: s.translationLangB,
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                    labelText: '语言 B',
+                    isDense: true,
+                  ),
+                  items: kTranslationLanguages
+                      .map((l) => DropdownMenuItem(value: l, child: Text(l)))
+                      .toList(),
+                  onChanged: (v) {
+                    if (v == null) return;
+                    s.setTranslationLangB(v);
+                    setM(() {});
+                    if (mounted) setState(() {});
+                  },
+                ),
+              ),
+            ],
+          ),
+          if (langsEqual)
+            Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: Row(
+                children: [
+                  Icon(Icons.info_outline, size: 16, color: cs.error),
+                  const SizedBox(width: 6),
+                  Text(
+                    '请选择两个不同的语言。',
+                    style: TextStyle(color: cs.error, fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -1206,11 +1178,17 @@ class _ChatScreenState extends State<ChatScreen>
     } else if (t.imageInput) {
       content = ClipRRect(
         borderRadius: BorderRadius.circular(10),
-        child: Image.memory(
-          t.image!.bytes,
+        child: SizedBox(
           width: 200,
-          fit: BoxFit.cover,
-          gaplessPlayback: true,
+          height: 150,
+          child: ColoredBox(
+            color: cs.primaryContainer.withValues(alpha: 0.28),
+            child: Image.memory(
+              t.image!.bytes,
+              fit: BoxFit.contain,
+              gaplessPlayback: true,
+            ),
+          ),
         ),
       );
     } else {

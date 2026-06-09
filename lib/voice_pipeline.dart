@@ -169,23 +169,6 @@ class TextTranslateStep
     TranslateTextInput input,
     PipelineContext context,
   ) async {
-    if (!context.settings.correctionEnabled) {
-      final text = input.text.trim();
-      return PipelineResult(
-        strategy: input.strategy,
-        rawTranscript:
-            input.strategy == PipelineStrategy.textOnlyTranslateThenTts
-            ? null
-            : input.text,
-        normalizedTranscript:
-            input.strategy == PipelineStrategy.textOnlyTranslateThenTts
-            ? null
-            : text,
-        translatedText: text,
-        displayText: text,
-        ttsText: text,
-      );
-    }
     final req = _requireChatRequest(context.settings);
     final sysPrompt = StringBuffer(context.settings.composedSystemPrompt());
     if (input.recentContext.isNotEmpty) {
@@ -360,7 +343,7 @@ class ImageTranslateStep
     final sysPrompt = PromptComposer.compose(
       PromptOptions(
         intent: PromptIntent.imageOcrAndTranslate,
-        translationEnabled: s.translationEnabled || s.correctionEnabled,
+        translationEnabled: true,
         translationLangA: s.translationLangA,
         translationLangB: s.translationLangB,
         scenePrompt: s.activeScene.prompt,
@@ -438,6 +421,7 @@ class TtsPipelineStep implements PipelineStep<String, void> {
       await service.speak(
         text: input,
         request: req,
+        client: context.client,
         timeout: Duration(seconds: context.settings.ttsTimeoutSeconds),
       );
     } catch (e) {

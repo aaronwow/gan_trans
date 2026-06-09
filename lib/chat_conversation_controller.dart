@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'chat_turn.dart';
 import 'providers.dart';
 import 'settings.dart';
+import 'stt_markers.dart';
 import 'stt_service.dart';
 import 'tts_queue.dart';
 import 'tts_service.dart';
@@ -239,6 +240,12 @@ class ChatConversationController extends ChangeNotifier {
       unawaited(File(path).delete().catchError((_) => File(path)));
       if (!_turnActive(t)) return false;
       t.audioPath = null;
+      if (isNonSpeechSttMarker(trimmed)) {
+        turns.remove(t);
+        notifyListeners();
+        maybeResumeHalfDuplex();
+        return false;
+      }
       t.userText = trimmed;
       t.state = trimmed.isEmpty ? TurnState.done : TurnState.waitingLlm;
       notifyListeners();

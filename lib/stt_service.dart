@@ -21,11 +21,13 @@ const _geminiTranscriptionPrompt =
 /// catalog so callers don't reach into provider-specific config.
 class SttRequest {
   final ApiDialect dialect;
+  final String baseUrl;
   final String modelId;
   final Map<CredentialField, String> creds;
 
   const SttRequest({
     required this.dialect,
+    this.baseUrl = '',
     required this.modelId,
     required this.creds,
   });
@@ -124,7 +126,10 @@ class SttService {
     if (apiKey.isEmpty) {
       throw StateError('OpenAI API key is not set.');
     }
-    final r = http.MultipartRequest('POST', Uri.parse(_openAiUrl))
+    final endpoint = req.baseUrl.trim().isEmpty
+        ? _openAiUrl
+        : '${req.baseUrl.replaceAll(RegExp(r'/+$'), '')}/audio/transcriptions';
+    final r = http.MultipartRequest('POST', Uri.parse(endpoint))
       ..headers['Authorization'] = 'Bearer $apiKey'
       ..fields['model'] = req.modelId
       ..fields['response_format'] = 'json'

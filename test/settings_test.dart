@@ -56,15 +56,32 @@ void main() {
     expect(settings.ttsModelId, ttsModel);
   });
 
-  test(
-    'correction is enabled by default for existing routing behavior',
-    () async {
-      SharedPreferences.setMockInitialValues({});
+  test('relay base URL is empty on a fresh install', () async {
+    SharedPreferences.setMockInitialValues({});
 
-      final settings = AppSettings();
-      await settings.load();
+    final settings = AppSettings();
+    await settings.load();
 
-      expect(settings.correctionEnabled, isTrue);
-    },
-  );
+    expect(settings.relayBaseUrl, isEmpty);
+    expect(settings.relayProvider, isNull);
+  });
+
+  test('correction and translation are always enabled', () async {
+    SharedPreferences.setMockInitialValues({
+      'correction_enabled': false,
+      'translation_enabled': false,
+    });
+
+    final settings = AppSettings();
+    await settings.load();
+
+    expect(settings.correctionEnabled, isTrue);
+    expect(settings.translationEnabled, isTrue);
+
+    await settings.setCorrectionEnabled(false);
+    await settings.setTranslationEnabled(false);
+
+    expect(settings.correctionEnabled, isTrue);
+    expect(settings.translationEnabled, isTrue);
+  });
 }

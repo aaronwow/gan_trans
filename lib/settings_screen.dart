@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'catalog.dart';
 import 'provider_model_picker.dart';
+import 'relay_catalog.dart';
 import 'settings.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -15,6 +16,16 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   /// Per (providerId, fieldName) text controllers, lazily created.
   final Map<String, TextEditingController> _credCtrls = {};
+  late final TextEditingController _relayBaseUrlCtrl;
+  bool _relayFetching = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _relayBaseUrlCtrl = TextEditingController(
+      text: widget.settings.relayBaseUrl,
+    );
+  }
 
   TextEditingController _credCtrl(String providerId, CredentialField f) {
     final key = '${providerId}__${f.name}';
@@ -26,8 +37,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  Future<void> _saveRelaySettings({bool showSnack = true}) async {
+    final s = widget.settings;
+    await s.setRelayBaseUrl(_relayBaseUrlCtrl.text);
+    _relayBaseUrlCtrl.text = s.relayBaseUrl;
+    await s.setCredential(
+      kRelayProviderId,
+      CredentialField.apiKey,
+      _credCtrl(kRelayProviderId, CredentialField.apiKey).text,
+    );
+    if (!mounted) return;
+    setState(() {});
+    if (showSnack) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Relay 设置已保存')));
+    }
+  }
+
   @override
   void dispose() {
+    _relayBaseUrlCtrl.dispose();
     for (final c in _credCtrls.values) {
       c.dispose();
     }
@@ -48,7 +78,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
             icon: Icons.key_outlined,
             title: 'Providers',
             subtitle: '各 provider 的凭证会复用于 Chat、STT 和 TTS。',
-            children: [for (final p in kCatalog) _providerCard(p)],
+            children: [
+              _relayProviderCard(),
+              const SizedBox(height: 10),
+              for (final p in kCatalog) _providerCard(p),
+            ],
           ),
           const SizedBox(height: 14),
           _settingsSection(
@@ -545,6 +579,201 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  Widget _relayProviderCard() {
+    final s = widget.settings;
+    final relay = s.relayProvider;
+    final cs = Theme.of(context).colorScheme;
+    final chatCount = relay?.modelsFor(Capability.chat).length ?? 0;
+    final sttCount = relay?.modelsFor(Capability.stt).length ?? 0;
+    final ttsCount = relay?.modelsFor(Capability.tts).length ?? 0;
+    final status = relay == null
+        ? '未抓取模型'
+        : '已抓取 ${relay.models.length} 个模型 · Chat $chatCount · STT $sttCount · TTS $ttsCount';
+    final fetchedAt = s.relayCatalogFetchedAt;
+    final relayBaseUrlReady = _relayBaseUrlCtrl.text.trim().isNotEmpty;
+    final relayApiKeyReady = _credCtrl(
+      kRelayProviderId,
+      CredentialField.apiKey,
+    ).text.trim().isNotEmpty;
+    final canFetchRelay = relayBaseUrlReady && relayApiKeyReady;
+    return Container(
+      decoration: BoxDecoration(
+        color: cs.primaryContainer.withValues(alpha: 0.32),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: cs.primary.withValues(alpha: 0.18)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'AI Chat Relay',
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                ),
+                IconButton(
+                  tooltip: '接口格式说明',
+                  visualDensity: VisualDensity.compact,
+                  icon: const Icon(Icons.help_outline, size: 18),
+                  onPressed: _showRelayModelsHelp,
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: relay == null ? cs.surface : cs.primaryContainer,
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Text(
+                    relay == null ? 'not loaded' : 'ready',
+                    style: TextStyle(
+                      color: relay == null
+                          ? cs.onSurfaceVariant
+                          : cs.onPrimaryContainer,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _relayBaseUrlCtrl,
+              keyboardType: TextInputType.url,
+              onChanged: (_) => setState(() {}),
+              decoration: const InputDecoration(
+                labelText: 'Relay Models URL',
+                hintText: kRelayBaseUrlExample,
+                isDense: true,
+                prefixIcon: Icon(Icons.link_outlined, size: 18),
+              ),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _credCtrl(kRelayProviderId, CredentialField.apiKey),
+              obscureText: true,
+              onChanged: (_) => setState(() {}),
+              decoration: const InputDecoration(
+                labelText: 'Relay API Key',
+                hintText: 'sk-relay_...',
+                isDense: true,
+                prefixIcon: Icon(Icons.lock_outline, size: 18),
+              ),
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    fetchedAt == null
+                        ? status
+                        : '$status\n更新于 ${TimeOfDay.fromDateTime(fetchedAt).format(context)}',
+                    style: TextStyle(
+                      color: cs.onSurfaceVariant,
+                      fontSize: 12,
+                      height: 1.35,
+                    ),
+                  ),
+                ),
+                OutlinedButton.icon(
+                  onPressed: _relayFetching
+                      ? null
+                      : () => _saveRelaySettings(showSnack: true),
+                  icon: const Icon(Icons.save_outlined),
+                  label: const Text('保存'),
+                ),
+                const SizedBox(width: 8),
+                Tooltip(
+                  message: canFetchRelay
+                      ? 'Fetch models'
+                      : '需要先填写 Relay Base URL 和 Relay API Key',
+                  child: FilledButton.icon(
+                    onPressed: _relayFetching || !canFetchRelay
+                        ? null
+                        : () async {
+                            setState(() => _relayFetching = true);
+                            try {
+                              await _saveRelaySettings(showSnack: false);
+                              await s.refreshRelayCatalog();
+                              if (!mounted) return;
+                              setState(() {});
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    '已抓取 ${s.relayProvider?.models.length ?? 0} 个 Relay 模型',
+                                  ),
+                                ),
+                              );
+                            } catch (e) {
+                              s.relayCatalogError = e.toString();
+                              if (!mounted) return;
+                              setState(() {});
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('抓取 Relay 模型失败：$e')),
+                              );
+                            } finally {
+                              if (mounted) {
+                                setState(() => _relayFetching = false);
+                              }
+                            }
+                          },
+                    icon: _relayFetching
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.cloud_sync_outlined),
+                    label: Text(_relayFetching ? 'Fetching' : 'Fetch models'),
+                  ),
+                ),
+              ],
+            ),
+            if (s.relayCatalogError != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                s.relayCatalogError!,
+                style: TextStyle(color: cs.error, fontSize: 12),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showRelayModelsHelp() {
+    showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Relay 模型接口'),
+        content: const SingleChildScrollView(
+          child: Text(
+            '推荐填写完整接口，例如：\n'
+            'https://relay.example.com/v1/models\n\n'
+            '接口应返回 OpenAI-compatible 模型列表：\n'
+            '{ "object": "list", "data": [ { "id": "model-id", "object": "model", "owned_by": "provider" } ] }\n\n'
+            '如果要让 App 识别语音、图片、TTS 等能力，可在 data[] 的每个模型对象里附加扩展字段：public_id、provider_id、display_name、capabilities、input_modalities、voices、stt_transport、supports_direct_audio_translate。\n\n'
+            '没有 capabilities 字段时，App 会把模型按 Chat-only 处理。',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('知道了'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _providerCard(ProviderSpec p) {
     final s = widget.settings;
     final caps = <String>[
@@ -640,7 +869,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Widget _ttsVoicePicker() {
     final s = widget.settings;
-    final provider = findProvider(s.ttsProviderId);
+    final provider = s.findProvider(s.ttsProviderId);
     final model = provider?.findModel(s.ttsModelId);
     final voices = model?.voices ?? const <TtsVoice>[];
     if (voices.isEmpty) return const SizedBox.shrink();
