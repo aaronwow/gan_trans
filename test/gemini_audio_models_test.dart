@@ -13,7 +13,7 @@ void main() {
     final google = findProvider('google')!;
 
     expect(google.dialects[Capability.stt], ApiDialect.geminiChat);
-    expect(google.dialects[Capability.tts], isNull);
+    expect(google.dialects[Capability.tts], ApiDialect.geminiSpeech);
 
     for (final modelId in [
       'gemini-3-flash-preview',
@@ -28,6 +28,10 @@ void main() {
       expect(model.canTranslateAudioDirect, isTrue, reason: modelId);
       expect(model.sttTransport, SttTransport.batchUpload, reason: modelId);
     }
+
+    final tts = google.findModel('gemini-3.1-flash-tts-preview')!;
+    expect(tts.supports(Capability.tts), isTrue);
+    expect(tts.voices.map((v) => v.id), containsAll(['Kore', 'Puck']));
   });
 
   test('OpenRouter Gemini chat models expose direct audio translation', () {
@@ -108,6 +112,12 @@ void main() {
     final routed = openrouter.findModel('x-ai/grok-voice-tts-1.0')!;
     expect(routed.supports(Capability.tts), isTrue);
     expect(routed.voices.map((v) => v.id), containsAll(['eve', 'sal', 'leo']));
+
+    final geminiTts = openrouter.findModel(
+      'google/gemini-3.1-flash-tts-preview',
+    )!;
+    expect(geminiTts.supports(Capability.tts), isTrue);
+    expect(geminiTts.voices.map((v) => v.id), containsAll(['Kore', 'Puck']));
   });
 
   test('xAI TTS uses the official text and voice_id payload', () {

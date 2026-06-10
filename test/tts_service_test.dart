@@ -83,4 +83,37 @@ void main() {
     expect(calls, 2);
     expect(models, ['tts-1', 'tts-1-hd']);
   });
+
+  test('Gemini TTS over OpenAI speech requests PCM and plays WAV', () async {
+    late Map<String, dynamic> body;
+    Uint8List? played;
+    String? mimeType;
+    final client = MockClient((request) async {
+      body = jsonDecode(request.body) as Map<String, dynamic>;
+      return http.Response.bytes([1, 0, 2, 0], 200);
+    });
+    final tts = TtsService(
+      playAudio: (bytes, mime) async {
+        played = bytes;
+        mimeType = mime;
+      },
+    );
+    addTearDown(tts.dispose);
+
+    const req = TtsRequest(
+      dialect: ApiDialect.openaiSpeech,
+      baseUrl: 'https://openrouter.ai/api/v1',
+      modelId: 'google/gemini-3.1-flash-tts-preview',
+      voice: 'Kore',
+      creds: {CredentialField.apiKey: 'test-key'},
+    );
+
+    await tts.speak(text: 'hello', request: req, client: client);
+
+    expect(body['response_format'], 'pcm');
+    expect(mimeType, 'audio/wav');
+    expect(played, isNotNull);
+    expect(String.fromCharCodes(played!.take(4)), 'RIFF');
+    expect(played!.length, 48);
+  });
 }

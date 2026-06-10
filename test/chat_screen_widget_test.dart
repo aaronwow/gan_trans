@@ -23,7 +23,8 @@ void main() {
 
     await tester.pumpWidget(MaterialApp(home: ChatScreen(settings: settings)));
 
-    expect(find.byTooltip('图片翻译'), findsOneWidget);
+    expect(find.byTooltip('从相册选择图片翻译'), findsOneWidget);
+    expect(find.byTooltip('拍照翻译'), findsOneWidget);
     expect(find.byTooltip('模型与语音快调'), findsOneWidget);
     expect(find.byTooltip('清空对话'), findsOneWidget);
   });

@@ -20,9 +20,10 @@ Some chat models can accept audio directly. For those models, the app can skip
 the separate STT step and run a fused audio-to-translation/correction request.
 
 The app also supports an image input flow that is intentionally separate from
-voice: the user attaches a photo (camera or gallery) and the chat model is
-asked to OCR the picture and translate the extracted text in a single call.
-Image turns never trigger STT or TTS auto-speak.
+voice: the user taps either the gallery or camera image button, attaches a
+photo, and the chat model is asked to OCR the picture and translate the
+extracted text in a single call. Image turns never trigger STT or TTS
+auto-speak.
 
 ## Architecture Overview
 
@@ -64,6 +65,9 @@ runtime clients, prompt composition, and pipeline orchestration.
     that model `acceptsImage()`). Use `effectiveImageProviderId/ModelId`,
     `imageInputAvailable`, and `buildImageChatRequest()` from runtime code
     instead of duplicating the fallback logic.
+  - Image model routing belongs in the model routing UI and full Settings, not
+    in the image attachment buttons. The image buttons should go directly to
+    gallery or camera.
   - Builds runtime request objects for chat, STT, TTS, and image-chat.
   - Keeps `composedSystemPrompt()` as the settings-facing prompt entry point,
     but actual prompt rules live in `PromptComposer`.
@@ -138,7 +142,7 @@ The app currently supports these strategies:
   - Optionally run selected TTS provider.
 
 - `imageOcrAndTranslate`
-  - User attaches an image (camera or gallery).
+  - User attaches an image with the dedicated camera or gallery button.
   - Send the image directly to the chat model resolved from
     `effectiveImageProviderId/ModelId` with the
     `PromptIntent.imageOcrAndTranslate` system prompt.

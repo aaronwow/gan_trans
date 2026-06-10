@@ -109,6 +109,10 @@ class _ChatScreenState extends State<ChatScreen>
   final ImagePicker _imagePicker = ImagePicker();
 
   Future<void> _pickAndSendImage(ImageSource source) async {
+    if (!widget.settings.imageInputAvailable) {
+      _showSnack('图片模型未配置，请在模型路由或 Settings 里选择支持图片输入的模型');
+      return;
+    }
     try {
       final picked = await _imagePicker.pickImage(
         source: source,
@@ -150,207 +154,6 @@ class _ChatScreenState extends State<ChatScreen>
       return 'webp';
     }
     return 'jpg';
-  }
-
-  Future<void> _openImageSheet() async {
-    final s = widget.settings;
-    await showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      isScrollControlled: true,
-      builder: (ctx) {
-        final cs = Theme.of(ctx).colorScheme;
-        return StatefulBuilder(
-          builder: (ctx, setSheet) {
-            final imageProviders = s.imageProviders().toList();
-            final effectivePid = s.effectiveImageProviderId;
-            final effectiveMid = s.effectiveImageModelId;
-            final overrideOn = s.imageProviderId != null;
-            final canSend = s.imageInputAvailable;
-            return SafeArea(
-              top: false,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Row(
-                      children: [
-                        Icon(Icons.image_outlined, color: cs.primary),
-                        const SizedBox(width: 8),
-                        Text(
-                          '图片翻译',
-                          style: Theme.of(ctx).textTheme.titleMedium,
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      '提取图片中的文字并按 ${s.translationLangA} ↔ ${s.translationLangB} 翻译。',
-                      style: TextStyle(
-                        color: cs.onSurfaceVariant,
-                        fontSize: 12,
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    Text('使用模型', style: Theme.of(ctx).textTheme.labelLarge),
-                    const SizedBox(height: 6),
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      dense: true,
-                      title: const Text('指定单独的图片模型'),
-                      subtitle: Text(
-                        overrideOn
-                            ? '已开启（不使用对话模型）'
-                            : '关闭：跟随当前对话模型 (${s.chatModelId.isEmpty ? "未设置" : s.chatModelId})',
-                        style: TextStyle(color: cs.onSurfaceVariant),
-                      ),
-                      value: overrideOn,
-                      onChanged: (v) async {
-                        if (v) {
-                          // Default to first image-capable provider if any.
-                          final firstPid = imageProviders.isEmpty
-                              ? null
-                              : imageProviders.first.id;
-                          if (firstPid == null) {
-                            setSheet(() {});
-                            return;
-                          }
-                          await s.setImageProvider(firstPid);
-                        } else {
-                          await s.setImageProvider(null);
-                        }
-                        setSheet(() {});
-                        if (mounted) setState(() {});
-                      },
-                    ),
-                    if (overrideOn) ...[
-                      DropdownButtonFormField<String>(
-                        initialValue: s.imageProviderId,
-                        isExpanded: true,
-                        decoration: const InputDecoration(
-                          labelText: '提供商',
-                          isDense: true,
-                        ),
-                        items: imageProviders
-                            .map(
-                              (p) => DropdownMenuItem(
-                                value: p.id,
-                                child: Text(p.name),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: (v) async {
-                          if (v == null) return;
-                          await s.setImageProvider(v);
-                          setSheet(() {});
-                          if (mounted) setState(() {});
-                        },
-                      ),
-                      const SizedBox(height: 10),
-                      Builder(
-                        builder: (_) {
-                          final pid = s.imageProviderId;
-                          final provider = pid == null
-                              ? null
-                              : s.findProvider(pid);
-                          final models = provider == null
-                              ? const <ModelSpec>[]
-                              : provider
-                                    .modelsFor(Capability.chat)
-                                    .where((m) => m.acceptsImage())
-                                    .toList();
-                          return DropdownButtonFormField<String>(
-                            initialValue:
-                                models.any((m) => m.id == s.imageModelId)
-                                ? s.imageModelId
-                                : (models.isEmpty ? null : models.first.id),
-                            isExpanded: true,
-                            decoration: const InputDecoration(
-                              labelText: '模型',
-                              isDense: true,
-                            ),
-                            items: models
-                                .map(
-                                  (m) => DropdownMenuItem(
-                                    value: m.id,
-                                    child: Text(m.label),
-                                  ),
-                                )
-                                .toList(),
-                            onChanged: (v) async {
-                              if (v == null) return;
-                              await s.setImageModel(v);
-                              setSheet(() {});
-                              if (mounted) setState(() {});
-                            },
-                          );
-                        },
-                      ),
-                    ],
-                    const SizedBox(height: 4),
-                    if (!canSend)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 6, bottom: 4),
-                        child: Text(
-                          overrideOn
-                              ? '请选择一个支持图片输入的模型。'
-                              : '当前对话模型不支持图片输入，请打开上面的开关挑选支持视觉的模型。',
-                          style: TextStyle(color: cs.error, fontSize: 12),
-                        ),
-                      )
-                    else
-                      Padding(
-                        padding: const EdgeInsets.only(top: 6, bottom: 4),
-                        child: Text(
-                          '将使用 $effectivePid · $effectiveMid',
-                          style: TextStyle(
-                            color: cs.onSurfaceVariant,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ),
-                    const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: FilledButton.icon(
-                            onPressed: canSend
-                                ? () async {
-                                    Navigator.of(ctx).pop();
-                                    await _pickAndSendImage(ImageSource.camera);
-                                  }
-                                : null,
-                            icon: const Icon(Icons.photo_camera_outlined),
-                            label: const Text('拍照'),
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: FilledButton.tonalIcon(
-                            onPressed: canSend
-                                ? () async {
-                                    Navigator.of(ctx).pop();
-                                    await _pickAndSendImage(
-                                      ImageSource.gallery,
-                                    );
-                                  }
-                                : null,
-                            icon: const Icon(Icons.photo_library_outlined),
-                            label: const Text('从相册'),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            );
-          },
-        );
-      },
-    );
   }
 
   void _scrollToBottom() {
@@ -519,9 +322,15 @@ class _ChatScreenState extends State<ChatScreen>
               ),
               const SizedBox(width: 8),
               _IconPill(
-                icon: Icons.image_outlined,
-                tooltip: '图片翻译',
-                onTap: _openImageSheet,
+                icon: Icons.photo_library_outlined,
+                tooltip: '从相册选择图片翻译',
+                onTap: () => _pickAndSendImage(ImageSource.gallery),
+              ),
+              const SizedBox(width: 8),
+              _IconPill(
+                icon: Icons.photo_camera_outlined,
+                tooltip: '拍照翻译',
+                onTap: () => _pickAndSendImage(ImageSource.camera),
               ),
               const SizedBox(width: 8),
               _IconPill(
@@ -804,7 +613,7 @@ class _ChatScreenState extends State<ChatScreen>
                               ),
                               SizedBox(height: 2),
                               Text(
-                                '快速选择 Chat、STT 和 TTS 路由。',
+                                '快速选择 Chat、图片、STT 和 TTS 路由。',
                                 style: TextStyle(fontSize: 12),
                               ),
                             ],
@@ -918,6 +727,19 @@ class _ChatScreenState extends State<ChatScreen>
                               },
                             ),
                         ],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    _sheetSection(
+                      icon: Icons.image_outlined,
+                      title: 'Image Translation',
+                      subtitle: '图片 OCR 和翻译使用的视觉模型',
+                      child: ImageModelRoutePicker(
+                        settings: s,
+                        onChanged: () {
+                          setM(() {});
+                          if (mounted) setState(() {});
+                        },
                       ),
                     ),
                     const SizedBox(height: 12),

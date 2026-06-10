@@ -14,6 +14,8 @@ class ProviderModelPicker extends StatelessWidget {
   final ValueChanged<String> onModel;
   final String providerLabel;
   final String modelLabel;
+  final Iterable<ProviderSpec> Function(AppSettings settings)? providersBuilder;
+  final bool Function(ModelSpec model)? modelFilter;
 
   const ProviderModelPicker({
     super.key,
@@ -27,11 +29,15 @@ class ProviderModelPicker extends StatelessWidget {
     this.enabled = true,
     this.providerLabel = 'Provider',
     this.modelLabel = 'Model',
+    this.providersBuilder,
+    this.modelFilter,
   });
 
   @override
   Widget build(BuildContext context) {
-    final providers = settings.providersFor(cap).toList();
+    final providers =
+        (providersBuilder?.call(settings) ?? settings.providersFor(cap))
+            .toList();
     final selected = settings.findProvider(providerId);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -60,7 +66,10 @@ class ProviderModelPicker extends StatelessWidget {
           _ModelDropdown(
             label: modelLabel,
             enabled: enabled && settings.hasCredentials(selected.id),
-            models: selected.modelsFor(cap).toList(),
+            models: selected
+                .modelsFor(cap)
+                .where(modelFilter ?? (_) => true)
+                .toList(),
             modelId: modelId,
             onModel: onModel,
           ),
@@ -76,6 +85,111 @@ class ProviderModelPicker extends StatelessWidget {
               ),
             ),
         ],
+      ],
+    );
+  }
+}
+
+class ImageModelRoutePicker extends StatelessWidget {
+  final AppSettings settings;
+  final VoidCallback? onChanged;
+
+  const ImageModelRoutePicker({
+    super.key,
+    required this.settings,
+    this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final imageProviders = settings.imageProviders().toList();
+    final overrideOn = settings.imageProviderId != null;
+    final canSend = settings.imageInputAvailable;
+    final effectiveProvider = settings.findProvider(
+      settings.effectiveImageProviderId,
+    );
+    final effectiveModel = effectiveProvider?.findModel(
+      settings.effectiveImageModelId,
+    );
+    final routeLabel =
+        '${effectiveProvider?.name ?? settings.effectiveImageProviderId ?? "未设置"} · ${effectiveModel?.label ?? settings.effectiveImageModelId}';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          title: const Text('指定单独的图片模型'),
+          subtitle: Text(
+            overrideOn
+                ? '图片翻译不跟随 Chat 模型。'
+                : '关闭：跟随当前 Chat 模型 (${settings.chatModelId.isEmpty ? "未设置" : settings.chatModelId})',
+            style: TextStyle(color: cs.onSurfaceVariant),
+          ),
+          value: overrideOn,
+          onChanged: imageProviders.isEmpty && !overrideOn
+              ? null
+              : (v) async {
+                  if (v) {
+                    if (imageProviders.isEmpty) return;
+                    await settings.setImageProvider(imageProviders.first.id);
+                  } else {
+                    await settings.setImageProvider(null);
+                  }
+                  onChanged?.call();
+                },
+        ),
+        if (overrideOn) ...[
+          ProviderModelPicker(
+            settings: settings,
+            cap: Capability.chat,
+            providerId: settings.imageProviderId,
+            modelId: settings.imageModelId,
+            allowOff: false,
+            providerLabel: '图片 Provider',
+            modelLabel: '图片 Model',
+            providersBuilder: (_) => settings.imageProviders(),
+            modelFilter: (model) => model.acceptsImage(),
+            onProvider: (id) async {
+              if (id == null) return;
+              await settings.setImageProvider(id);
+              onChanged?.call();
+            },
+            onModel: (id) async {
+              await settings.setImageModel(id);
+              onChanged?.call();
+            },
+          ),
+        ],
+        Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(
+                canSend ? Icons.check_circle_outline : Icons.info_outline,
+                size: 16,
+                color: canSend ? cs.primary : cs.error,
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  canSend
+                      ? '当前使用 $routeLabel'
+                      : (overrideOn
+                            ? '请选择一个支持图片输入的模型。'
+                            : '当前 Chat 模型不支持图片输入；开启单独图片模型后选择支持视觉的模型。'),
+                  style: TextStyle(
+                    color: canSend ? cs.onSurfaceVariant : cs.error,
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
       ],
     );
   }

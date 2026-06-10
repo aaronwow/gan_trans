@@ -91,6 +91,13 @@ Map<String, dynamic> xaiSpeechPayload({
   };
 }
 
+bool openAiSpeechModelRequiresPcm(String modelId) {
+  final normalized = modelId.toLowerCase();
+  return normalized.contains('gemini') &&
+      normalized.contains('tts') &&
+      normalized.contains('preview');
+}
+
 class TtsService {
   static const int _maxCachedAudio = 24;
 
@@ -233,6 +240,7 @@ class TtsService {
     final endpoint = req.baseUrl.trim().isEmpty
         ? _openAiSpeechUrl
         : '${req.baseUrl.replaceAll(RegExp(r'/+$'), '')}/audio/speech';
+    final requiresPcm = openAiSpeechModelRequiresPcm(req.modelId);
     final resp = await client
         .post(
           Uri.parse(endpoint),
@@ -244,14 +252,24 @@ class TtsService {
             'model': req.modelId,
             'voice': req.voice,
             'input': text,
-            'response_format': 'mp3',
+            'response_format': requiresPcm ? 'pcm' : 'mp3',
           }),
         )
         .timeout(timeout);
     if (resp.statusCode >= 400) {
       throw Exception('OpenAI TTS ${resp.statusCode}: ${resp.body}');
     }
-    return _TtsAudio(Uint8List.fromList(resp.bodyBytes), 'audio/mpeg');
+    final contentType = resp.headers['content-type'] ?? '';
+    if (requiresPcm && !contentType.toLowerCase().contains('wav')) {
+      return _TtsAudio(
+        _wavFromPcm16(resp.bodyBytes, sampleRate: 24000, channels: 1),
+        'audio/wav',
+      );
+    }
+    return _TtsAudio(
+      Uint8List.fromList(resp.bodyBytes),
+      contentType.isEmpty ? 'audio/mpeg' : contentType,
+    );
   }
 
   Future<_TtsAudio> _fetchXAiAudio(

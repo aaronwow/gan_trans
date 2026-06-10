@@ -143,6 +143,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const SizedBox(height: 14),
           _settingsSection(
+            icon: Icons.image_outlined,
+            title: 'Image Translation',
+            subtitle: '图片 OCR 和翻译使用的视觉模型。',
+            children: [
+              ImageModelRoutePicker(
+                settings: s,
+                onChanged: () {
+                  if (mounted) setState(() {});
+                },
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          _settingsSection(
             icon: Icons.graphic_eq,
             title: 'Speech-to-Text',
             subtitle: s.audioDirectActive

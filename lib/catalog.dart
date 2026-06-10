@@ -137,6 +137,19 @@ const _xAiTtsVoices = [
   TtsVoice('leo', 'Leo', lang: 'multilingual'),
 ];
 
+const _geminiTtsVoices = [
+  TtsVoice('Zephyr', 'Zephyr - Bright'),
+  TtsVoice('Puck', 'Puck - Upbeat'),
+  TtsVoice('Charon', 'Charon - Informative'),
+  TtsVoice('Kore', 'Kore - Firm'),
+  TtsVoice('Fenrir', 'Fenrir - Excitable'),
+  TtsVoice('Leda', 'Leda - Youthful'),
+  TtsVoice('Orus', 'Orus - Firm'),
+  TtsVoice('Aoede', 'Aoede - Breezy'),
+  TtsVoice('Callirrhoe', 'Callirrhoe - Easy-going'),
+  TtsVoice('Autonoe', 'Autonoe - Bright'),
+];
+
 const _openAi = ProviderSpec(
   id: 'openai',
   name: 'OpenAI',
@@ -267,6 +280,7 @@ const _google = ProviderSpec(
   dialects: {
     Capability.chat: ApiDialect.geminiChat,
     Capability.stt: ApiDialect.geminiChat,
+    Capability.tts: ApiDialect.geminiSpeech,
   },
   credentials: [CredentialField.apiKey],
   models: [
@@ -301,6 +315,12 @@ const _google = ProviderSpec(
       inputs: {Modality.text, Modality.audio, Modality.image},
       sttTransport: SttTransport.batchUpload,
       supportsDirectAudioTranslate: true,
+    ),
+    ModelSpec(
+      id: 'gemini-3.1-flash-tts-preview',
+      label: 'Gemini 3.1 Flash TTS Preview',
+      caps: {Capability.tts},
+      voices: _geminiTtsVoices,
     ),
   ],
 );
@@ -361,6 +381,12 @@ const _openRouter = ProviderSpec(
       caps: {Capability.chat},
       inputs: {Modality.text, Modality.audio, Modality.image},
       supportsDirectAudioTranslate: true,
+    ),
+    ModelSpec(
+      id: 'google/gemini-3.1-flash-tts-preview',
+      label: 'Gemini 3.1 Flash TTS Preview',
+      caps: {Capability.tts},
+      voices: _geminiTtsVoices,
     ),
     // OpenAI
     ModelSpec(
