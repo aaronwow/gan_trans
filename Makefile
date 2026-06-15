@@ -1,6 +1,6 @@
 .PHONY: help install get upgrade clean analyze format test \
         dev dev-ios dev-android run run-ios run-android \
-        profile profile-ios release release-ios \
+        profile profile-ios release release-ios release-beta release-ios-beta \
         build-ios build-ios-ipa build-apk build-appbundle \
         devices doctor pods log status
 
@@ -11,6 +11,7 @@ DEVICE  ?=
 FLAVOR  ?=
 MAIN    ?= lib/main.dart
 IPHONE_DEVICE_ID := 00008130-0009088A02D8001C
+XCODE_BETA_DEVELOPER_DIR ?= /Applications/Xcode-beta.app/Contents/Developer
 
 RUN_ARGS =
 ifneq ($(DEVICE),)
@@ -38,6 +39,8 @@ help:
 	@echo "  make profile-ios      - profile mode on iOS"
 	@echo "  make release          - release mode run"
 	@echo "  make release-ios      - release mode run on iOS"
+	@echo "  make release-beta     - release mode run using Xcode beta"
+	@echo "  make release-ios-beta - release mode run on iOS using Xcode beta"
 	@echo ""
 	@echo "  make build-ios        - build iOS (no codesign)"
 	@echo "  make build-ios-ipa    - build signed .ipa"
@@ -95,6 +98,12 @@ release:
 
 release-ios:
 	$(FLUTTER) run --release -d ios $(RUN_ARGS) -t $(MAIN)
+
+release-beta:
+	DEVELOPER_DIR=$(XCODE_BETA_DEVELOPER_DIR) $(FLUTTER) run --release -d $(IPHONE_DEVICE_ID) $(RUN_ARGS) -t $(MAIN)
+
+release-ios-beta:
+	DEVELOPER_DIR=$(XCODE_BETA_DEVELOPER_DIR) $(FLUTTER) run --release -d ios $(RUN_ARGS) -t $(MAIN)
 
 # -------- Builds --------
 build-ios:
