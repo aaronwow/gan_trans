@@ -1,6 +1,27 @@
-# ai_chat
+# gan-trans
 
 A new Flutter project.
+
+## Android Release APK
+
+GitHub Actions builds and publishes a universal Android APK to GitHub Releases.
+
+Create a release from a tag:
+
+```sh
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+Or run the `Android Release APK` workflow manually from GitHub Actions. If the
+manual run does not provide a tag, it uses the version from `pubspec.yaml`
+(`version: 1.0.0+1` becomes release tag `v1.0.0`).
+
+The published APK asset is named like:
+
+```text
+gan-trans-v1.0.0-universal.apk
+```
 
 ## Getting Started
 

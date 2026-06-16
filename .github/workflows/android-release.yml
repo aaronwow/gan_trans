@@ -1,0 +1,127 @@
+name: Android Release APK
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag. Leave empty to use pubspec.yaml version, e.g. v1.0.0."
+        required: false
+        type: string
+      prerelease:
+        description: "Mark the GitHub Release as a prerelease."
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  build-release-apk:
+    name: Build universal APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Resolve release metadata
+        id: meta
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag || '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="$(awk '/^version:/ {print $2; exit}' pubspec.yaml)"
+          version_name="${version%%+*}"
+          build_number="${version#*+}"
+
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && -n "${INPUT_TAG}" ]]; then
+            tag="${INPUT_TAG}"
+          elif [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            tag="v${version_name}"
+          else
+            tag="${GITHUB_REF_NAME}"
+          fi
+
+          safe_tag="${tag//\//-}"
+          apk_name="gan-trans-${safe_tag}-universal.apk"
+
+          {
+            echo "version=${version}"
+            echo "version_name=${version_name}"
+            echo "build_number=${build_number}"
+            echo "tag=${tag}"
+            echo "apk_name=${apk_name}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Run tests
+        run: flutter test
+
+      - name: Build universal release APK
+        run: flutter build apk --release
+
+      - name: Prepare release files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          cp build/app/outputs/flutter-apk/app-release.apk "release/${{ steps.meta.outputs.apk_name }}"
+          sha256sum "release/${{ steps.meta.outputs.apk_name }}" > "release/${{ steps.meta.outputs.apk_name }}.sha256"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.apk_name }}
+          path: release/*
+          if-no-files-found: error
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          PRERELEASE: ${{ github.event.inputs.prerelease || 'false' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          release_notes="Universal Android APK for gan-trans ${VERSION}."
+          prerelease_flag=()
+          if [[ "${PRERELEASE}" == "true" ]]; then
+            prerelease_flag=(--prerelease)
+          fi
+
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release edit "${TAG}" \
+              --title "${TAG}" \
+              --notes "${release_notes}" \
+              "${prerelease_flag[@]}"
+          else
+            gh release create "${TAG}" \
+              --target "${GITHUB_SHA}" \
+              --title "${TAG}" \
+              --notes "${release_notes}" \
+              "${prerelease_flag[@]}"
+          fi
+
+          gh release upload "${TAG}" release/* --clobber
