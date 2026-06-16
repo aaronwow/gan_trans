@@ -1,36 +1,49 @@
-# gan-trans
+# GanTrans
 
-GanTrans is a Flutter app for voice, text, and image translation. It is built
-around a configurable AI pipeline: record or type input, send it to a selected
-model for correction/translation, and optionally play the translated result
-with text-to-speech.
+GanTrans is an open-source Flutter app for voice, text, and image translation.
+It lets you choose the AI provider and model used for each stage of the
+translation flow, including speech-to-text, chat translation/correction, and
+text-to-speech playback.
 
 ## Features
 
-- Voice input with push-to-talk and continuous listening modes.
-- Text correction and translation with scene-specific prompts.
-- Image OCR and translation from camera or photo library.
-- Optional TTS playback for translated output.
-- Configurable providers and models for chat, STT, and TTS.
+- Push-to-talk and continuous voice input.
+- Text translation and correction with scene-specific prompts.
+- Image OCR and translation from the camera or photo library.
+- Optional text-to-speech playback for translated output.
+- Separate provider/model settings for chat, STT, and TTS.
 - Optional custom Relay endpoint for routing requests through your own backend.
 
-## Android Release APK
+## Download
 
-GitHub Actions builds and publishes a universal Android APK to GitHub Releases.
+### Android
 
-Create a release from a tag:
+Download the latest universal APK from
+[GitHub Releases](https://github.com/aaronwow/gan_trans/releases/latest).
+
+### iOS
+
+GanTrans is not available on the App Store yet. Build and install it locally
+with Xcode:
+
+1. Install Flutter and Xcode.
+2. Run `flutter pub get`.
+3. Open `ios/Runner.xcworkspace` in Xcode.
+4. Select your signing team and connect your iPhone.
+5. Build and run from Xcode.
+
+## Development
+
+Run the app locally:
 
 ```sh
-git tag v1.0.0
-git push origin v1.0.0
+flutter pub get
+flutter run
 ```
 
-Or run the `Android Release APK` workflow manually from GitHub Actions. If the
-manual run does not provide a tag, it uses the version from `pubspec.yaml`
-(`version: 1.0.0+1` becomes release tag `v1.0.0`).
+Run checks:
 
-The published APK asset is named like:
-
-```text
-gan-trans-v1.0.0-universal.apk
+```sh
+flutter analyze
+flutter test
 ```
