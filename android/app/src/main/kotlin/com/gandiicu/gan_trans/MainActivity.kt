@@ -1,4 +1,4 @@
-package com.gandiicu.gantranslate
+package com.gandiicu.gan_trans
 
 import io.flutter.embedding.android.FlutterActivity
 

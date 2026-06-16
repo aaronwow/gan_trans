@@ -105,6 +105,61 @@ void main() {
     await audio.delete();
   });
 
+  test(
+    'OpenRouter audio chat STT sends chat completions audio payload',
+    () async {
+      final audio = await File(
+        '${Directory.systemTemp.path}/openrouter-chat-stt.wav',
+      ).writeAsBytes([4, 5, 6]);
+      late Uri uri;
+      late Map<String, dynamic> payload;
+
+      final client = MockClient((request) async {
+        uri = request.url;
+        payload = jsonDecode(request.body) as Map<String, dynamic>;
+        expect(request.headers['Authorization'], 'Bearer key');
+        expect(request.headers['Content-Type'], contains('application/json'));
+        return http.Response(
+          jsonEncode({
+            'choices': [
+              {
+                'message': {'content': 'hello from chat audio'},
+              },
+            ],
+          }),
+          200,
+        );
+      });
+
+      final text = await SttService().transcribe(
+        filePath: audio.path,
+        format: 'wav',
+        request: const SttRequest(
+          dialect: ApiDialect.openrouterTranscribe,
+          baseUrl: 'https://openrouter.ai/api/v1',
+          modelId: 'google/gemini-3.5-flash',
+          creds: {CredentialField.apiKey: 'key'},
+        ),
+        client: client,
+      );
+
+      expect(uri.path, '/api/v1/chat/completions');
+      expect(text, 'hello from chat audio');
+      expect(payload['model'], 'google/gemini-3.5-flash');
+      final messages = payload['messages'] as List<dynamic>;
+      final content =
+          (messages.single as Map<String, dynamic>)['content'] as List;
+      final audioPart = content.whereType<Map>().firstWhere(
+        (part) => part['type'] == 'input_audio',
+      );
+      final inputAudio = audioPart['input_audio'] as Map<String, dynamic>;
+      expect(inputAudio['format'], 'wav');
+      expect(inputAudio['data'], base64Encode([4, 5, 6]));
+
+      await audio.delete();
+    },
+  );
+
   test('xAI Grok Voice TTS is available directly and via OpenRouter', () {
     final xai = findProvider('xai')!;
     expect(xai.dialects[Capability.tts], ApiDialect.xaiSpeech);

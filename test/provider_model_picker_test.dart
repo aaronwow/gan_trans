@@ -34,4 +34,22 @@ void main() {
 
     expect(find.textContaining('缺少 OpenAI 凭证'), findsOneWidget);
   });
+
+  test('orders providers with credentials before missing API keys', () async {
+    SharedPreferences.setMockInitialValues({});
+    final settings = AppSettings();
+    await settings.load();
+    await settings.setCredential('google', CredentialField.apiKey, 'test-key');
+
+    final providerIds = sortedProvidersForPicker(
+      settings.providersFor(Capability.chat),
+      settings,
+    ).map((provider) => provider.id).toList();
+
+    expect(providerIds.first, 'google');
+    expect(
+      providerIds.indexOf('google'),
+      lessThan(providerIds.indexOf('openrouter')),
+    );
+  });
 }

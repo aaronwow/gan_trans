@@ -165,7 +165,7 @@ class _RoutingToggle extends StatelessWidget {
     final fg = active ? cs.onPrimaryContainer : cs.onSurfaceVariant;
     return Tooltip(
       message: !interactive
-          ? '$tooltip 已由 Audio direct 暂停'
+          ? '$tooltip 已由音频直连暂停'
           : '$tooltip ${enabled ? "开启" : "关闭"}',
       child: InkWell(
         onTap: interactive ? onTap : null,
@@ -254,12 +254,12 @@ class _DuplexFilter extends StatelessWidget {
         ButtonSegment(
           value: false,
           icon: Icon(Icons.compare_arrows, size: 16),
-          label: Text('Half-duplex'),
+          label: Text('半双工'),
         ),
         ButtonSegment(
           value: true,
           icon: Icon(Icons.swap_horiz, size: 16),
-          label: Text('Full-duplex'),
+          label: Text('全双工'),
         ),
       ],
       selected: {fullDuplex},

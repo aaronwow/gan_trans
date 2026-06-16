@@ -10,7 +10,6 @@ DART    ?= dart
 DEVICE  ?=
 FLAVOR  ?=
 MAIN    ?= lib/main.dart
-IPHONE_DEVICE_ID := 00008130-0009088A02D8001C
 XCODE_BETA_DEVELOPER_DIR ?= /Applications/Xcode-beta.app/Contents/Developer
 
 RUN_ARGS =
@@ -88,19 +87,21 @@ dev-android run-android:
 	$(FLUTTER) run -d android $(RUN_ARGS) -t $(MAIN)
 
 profile:
-	$(FLUTTER) run --profile -d $(IPHONE_DEVICE_ID) -t $(MAIN)
+	$(FLUTTER) run --profile $(RUN_ARGS) -t $(MAIN)
 
 profile-ios:
 	$(FLUTTER) run --profile -d ios $(RUN_ARGS) -t $(MAIN)
 
 release:
-	$(FLUTTER) run --release -d $(IPHONE_DEVICE_ID) $(RUN_ARGS) -t $(MAIN)
+	$(FLUTTER) run --release $(RUN_ARGS) -t $(MAIN)
 
 release-ios:
 	$(FLUTTER) run --release -d ios $(RUN_ARGS) -t $(MAIN)
 
 release-beta:
-	DEVELOPER_DIR=$(XCODE_BETA_DEVELOPER_DIR) $(FLUTTER) run --release -d $(IPHONE_DEVICE_ID) $(RUN_ARGS) -t $(MAIN)
+	@test -n "$(DEVICE)" || (echo "DEVICE is required, e.g. make release-beta DEVICE=<id>"; exit 1)
+	DEVELOPER_DIR=$(XCODE_BETA_DEVELOPER_DIR) $(FLUTTER) build ios --release -t $(MAIN)
+	DEVELOPER_DIR=$(XCODE_BETA_DEVELOPER_DIR) ./scripts/install_ios_release.sh $(DEVICE) build/ios/iphoneos/Runner.app
 
 release-ios-beta:
 	DEVELOPER_DIR=$(XCODE_BETA_DEVELOPER_DIR) $(FLUTTER) run --release -d ios $(RUN_ARGS) -t $(MAIN)

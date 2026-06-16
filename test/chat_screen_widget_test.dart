@@ -12,6 +12,7 @@ void main() {
     SharedPreferences.setMockInitialValues({
       'stt_provider_id': '',
       'tts_provider_id': '',
+      'audio_direct_chat': false,
     });
     final settings = AppSettings();
     await settings.load();
@@ -26,7 +27,7 @@ void main() {
     expect(find.byTooltip('从相册选择图片翻译'), findsOneWidget);
     expect(find.byTooltip('拍照翻译'), findsOneWidget);
     expect(find.byTooltip('模型与语音快调'), findsOneWidget);
-    expect(find.byTooltip('清空对话'), findsOneWidget);
+    expect(find.byTooltip('新对话'), findsOneWidget);
   });
 
   testWidgets('language picker keeps both languages different', (tester) async {

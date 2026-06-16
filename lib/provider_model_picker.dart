@@ -3,6 +3,38 @@ import 'package:flutter/material.dart';
 import 'catalog.dart';
 import 'settings.dart';
 
+@visibleForTesting
+List<ProviderSpec> sortedProvidersForPicker(
+  Iterable<ProviderSpec> providers,
+  AppSettings settings,
+) {
+  final indexed = providers.toList().asMap().entries.toList();
+  indexed.sort((a, b) {
+    final aReady = settings.hasCredentials(a.value.id);
+    final bReady = settings.hasCredentials(b.value.id);
+    if (aReady != bReady) return aReady ? -1 : 1;
+
+    final priority = _providerPriority(
+      a.value.id,
+    ).compareTo(_providerPriority(b.value.id));
+    if (priority != 0) return priority;
+
+    return a.key.compareTo(b.key);
+  });
+  return [for (final entry in indexed) entry.value];
+}
+
+int _providerPriority(String id) {
+  switch (id) {
+    case 'openrouter':
+      return 0;
+    case 'relay':
+      return 1;
+    default:
+      return 2;
+  }
+}
+
 class ProviderModelPicker extends StatelessWidget {
   final AppSettings settings;
   final Capability cap;
@@ -27,17 +59,18 @@ class ProviderModelPicker extends StatelessWidget {
     required this.onProvider,
     required this.onModel,
     this.enabled = true,
-    this.providerLabel = 'Provider',
-    this.modelLabel = 'Model',
+    this.providerLabel = '服务商',
+    this.modelLabel = '模型',
     this.providersBuilder,
     this.modelFilter,
   });
 
   @override
   Widget build(BuildContext context) {
-    final providers =
-        (providersBuilder?.call(settings) ?? settings.providersFor(cap))
-            .toList();
+    final providers = sortedProvidersForPicker(
+      providersBuilder?.call(settings) ?? settings.providersFor(cap),
+      settings,
+    );
     final selected = settings.findProvider(providerId);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -77,7 +110,7 @@ class ProviderModelPicker extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.only(top: 6),
               child: Text(
-                '缺少 ${selected.name} 凭证，请到 Settings 的 Providers 区域填写后再使用。',
+                '缺少 ${selected.name} 凭证，请到设置页的服务商区域填写后再使用。',
                 style: TextStyle(
                   color: Theme.of(context).colorScheme.error,
                   fontSize: 12,
@@ -124,8 +157,8 @@ class ImageModelRoutePicker extends StatelessWidget {
           title: const Text('指定单独的图片模型'),
           subtitle: Text(
             overrideOn
-                ? '图片翻译不跟随 Chat 模型。'
-                : '关闭：跟随当前 Chat 模型 (${settings.chatModelId.isEmpty ? "未设置" : settings.chatModelId})',
+                ? '图片翻译不跟随对话模型。'
+                : '关闭：跟随当前对话模型 (${settings.chatModelId.isEmpty ? "未设置" : settings.chatModelId})',
             style: TextStyle(color: cs.onSurfaceVariant),
           ),
           value: overrideOn,
@@ -148,8 +181,8 @@ class ImageModelRoutePicker extends StatelessWidget {
             providerId: settings.imageProviderId,
             modelId: settings.imageModelId,
             allowOff: false,
-            providerLabel: '图片 Provider',
-            modelLabel: '图片 Model',
+            providerLabel: '图片服务商',
+            modelLabel: '图片模型',
             providersBuilder: (_) => settings.imageProviders(),
             modelFilter: (model) => model.acceptsImage(),
             onProvider: (id) async {
@@ -180,7 +213,7 @@ class ImageModelRoutePicker extends StatelessWidget {
                       ? '当前使用 $routeLabel'
                       : (overrideOn
                             ? '请选择一个支持图片输入的模型。'
-                            : '当前 Chat 模型不支持图片输入；开启单独图片模型后选择支持视觉的模型。'),
+                            : '当前对话模型不支持图片输入；开启单独图片模型后选择支持视觉的模型。'),
                   style: TextStyle(
                     color: canSend ? cs.onSurfaceVariant : cs.error,
                     fontSize: 12,
@@ -220,7 +253,7 @@ class _ProviderOption extends StatelessWidget {
         if (missingCredentials) ...[
           const SizedBox(width: 8),
           Text(
-            'no API key',
+            '缺少密钥',
             style: TextStyle(
               color: cs.error,
               fontSize: 11,

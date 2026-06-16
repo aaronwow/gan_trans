@@ -76,6 +76,31 @@ void main() {
     expect(settings.historyContextCount, 0);
   });
 
+  test('fresh install defaults chat to OpenRouter', () async {
+    SharedPreferences.setMockInitialValues({});
+
+    final settings = AppSettings();
+    await settings.load();
+
+    expect(settings.chatProviderId, 'openrouter');
+    expect(settings.findProvider(settings.chatProviderId)?.name, 'OpenRouter');
+    expect(settings.chatModelId, 'google/gemini-3.1-flash-lite');
+    expect(settings.audioDirectChat, isTrue);
+    expect(settings.audioDirectIncludeTranscript, isTrue);
+    expect(settings.audioDirectActive, isTrue);
+  });
+
+  test('fresh install defaults TTS to OpenRouter Grok', () async {
+    SharedPreferences.setMockInitialValues({});
+
+    final settings = AppSettings();
+    await settings.load();
+
+    expect(settings.ttsProviderId, 'openrouter');
+    expect(settings.ttsModelId, 'x-ai/grok-voice-tts-1.0');
+    expect(settings.ttsVoice, isNotEmpty);
+  });
+
   test('correction and translation are always enabled', () async {
     SharedPreferences.setMockInitialValues({
       'correction_enabled': false,

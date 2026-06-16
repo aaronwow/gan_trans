@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'catalog.dart';
 import 'provider_model_picker.dart';
@@ -18,10 +19,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final Map<String, TextEditingController> _credCtrls = {};
   late final TextEditingController _relayBaseUrlCtrl;
   bool _relayFetching = false;
+  bool _showAdditionalProviders = false;
+  late final bool _showProviderQuickStart;
 
   @override
   void initState() {
     super.initState();
+    _showProviderQuickStart = !widget.settings.hasAnyChatProviderCredentials;
     _relayBaseUrlCtrl = TextEditingController(
       text: widget.settings.relayBaseUrl,
     );
@@ -34,6 +38,55 @@ class _SettingsScreenState extends State<SettingsScreen> {
       () => TextEditingController(
         text: widget.settings.credential(providerId, f),
       ),
+    );
+  }
+
+  Future<void> _pasteCredential(String providerId, CredentialField f) async {
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final text = data?.text?.trim() ?? '';
+    if (text.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('剪贴板没有可粘贴的内容')));
+      return;
+    }
+    final ctrl = _credCtrl(providerId, f);
+    ctrl.text = text;
+    ctrl.selection = TextSelection.collapsed(offset: text.length);
+    await widget.settings.setCredential(providerId, f, text);
+    if (!mounted) return;
+    setState(() {});
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('已从剪贴板粘贴并保存')));
+  }
+
+  Widget _credentialField({
+    required String providerId,
+    required CredentialField field,
+    required String labelText,
+    String? hintText,
+  }) {
+    final s = widget.settings;
+    return TextField(
+      controller: _credCtrl(providerId, field),
+      obscureText: true,
+      decoration: InputDecoration(
+        labelText: labelText,
+        hintText: hintText,
+        isDense: true,
+        prefixIcon: const Icon(Icons.lock_outline, size: 18),
+        suffixIcon: IconButton(
+          tooltip: '从剪贴板粘贴',
+          icon: const Icon(Icons.content_paste_outlined, size: 18),
+          onPressed: () => _pasteCredential(providerId, field),
+        ),
+      ),
+      onChanged: (v) async {
+        await s.setCredential(providerId, field, v);
+        if (mounted) setState(() {});
+      },
     );
   }
 
@@ -68,7 +121,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Widget build(BuildContext context) {
     final s = widget.settings;
     return Scaffold(
-      appBar: AppBar(title: const Text('Settings')),
+      appBar: AppBar(title: const Text('设置')),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
         children: [
@@ -76,18 +129,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: 16),
           _settingsSection(
             icon: Icons.key_outlined,
-            title: 'Providers',
-            subtitle: '各 provider 的凭证会复用于 Chat、STT 和 TTS。',
-            children: [
-              _relayProviderCard(),
-              const SizedBox(height: 10),
-              for (final p in kCatalog) _providerCard(p),
-            ],
+            title: '服务商',
+            subtitle: '各服务商的凭证会复用于对话、语音识别和语音播放。',
+            children: [_providerSettingsList()],
           ),
           const SizedBox(height: 14),
           _settingsSection(
             icon: Icons.chat_bubble_outline,
-            title: 'Chat',
+            title: '对话',
             subtitle: '选择对话模型和上下文策略。',
             children: [
               ProviderModelPicker(
@@ -108,8 +157,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
               const SizedBox(height: 10),
               _settingsSwitch(
-                title: 'Include scene prompt',
-                subtitle: '每次 Chat 请求都带上当前场景提示词。',
+                title: '带上场景提示词',
+                subtitle: '每次对话请求都带上当前场景提示词。',
                 value: s.includeScenePrompt,
                 onChanged: (v) {
                   s.setIncludeScenePrompt(v);
@@ -117,10 +166,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 },
               ),
               _settingsSwitch(
-                title: 'Audio direct',
+                title: '音频直连',
                 subtitle: s.chatModelAcceptsAudio
-                    ? '录音直接发送给 Chat，跳过 STT。'
-                    : '当前 Chat 模型不支持音频输入，请换用支持音频的模型。',
+                    ? '录音直接发送给对话模型，跳过语音识别。'
+                    : '当前对话模型不支持音频输入，请换用支持音频的模型。',
                 value: s.audioDirectChat && s.chatModelAcceptsAudio,
                 onChanged: s.chatModelAcceptsAudio
                     ? (v) {
@@ -131,7 +180,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
               if (s.audioDirectActive)
                 _settingsSwitch(
-                  title: 'Return original transcript',
+                  title: '返回原始转录',
                   subtitle: '要求模型返回原始转录和最终输出。',
                   value: s.audioDirectIncludeTranscript,
                   onChanged: (v) {
@@ -144,8 +193,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: 14),
           _settingsSection(
             icon: Icons.image_outlined,
-            title: 'Image Translation',
-            subtitle: '图片 OCR 和翻译使用的视觉模型。',
+            title: '图片翻译',
+            subtitle: '图片文字识别和翻译使用的视觉模型。',
             children: [
               ImageModelRoutePicker(
                 settings: s,
@@ -158,9 +207,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: 14),
           _settingsSection(
             icon: Icons.graphic_eq,
-            title: 'Speech-to-Text',
+            title: '语音识别',
             subtitle: s.audioDirectActive
-                ? 'Audio direct 已接管语音输入，STT 暂停。'
+                ? '音频直连已接管语音输入，语音识别暂停。'
                 : '麦克风输入使用的识别模型。',
             children: [
               Opacity(
@@ -171,8 +220,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     if (s.audioDirectActive) ...[
                       _settingsNotice(
                         icon: Icons.info_outline,
-                        text:
-                            'Audio direct 已开启：语音会直接发送给 Chat，关闭 Audio direct 后才能调整 STT。',
+                        text: '音频直连已开启：语音会直接发送给对话模型，关闭音频直连后才能调整语音识别。',
                       ),
                       const SizedBox(height: 10),
                     ],
@@ -200,7 +248,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: 14),
           _settingsSection(
             icon: Icons.volume_up_outlined,
-            title: 'Text-to-Speech',
+            title: '语音播放',
             subtitle: '语音播放模型和自动播放行为。',
             children: [
               ProviderModelPicker(
@@ -223,8 +271,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 _ttsVoicePicker(),
                 const SizedBox(height: 10),
                 _settingsSwitch(
-                  title: 'Auto-speak assistant replies',
-                  subtitle: '每次回复生成后自动播放 TTS。',
+                  title: '自动朗读助手回复',
+                  subtitle: '每次回复生成后自动播放语音。',
                   value: s.ttsAutoSpeak,
                   onChanged: (v) {
                     s.setTtsAutoSpeak(v);
@@ -238,12 +286,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: 14),
           _settingsSection(
             icon: Icons.mic_none,
-            title: 'Microphone',
+            title: '麦克风',
             subtitle: '录音滤波和语音活动检测。',
             children: [
               _settingsSwitch(
-                title: 'Acoustic echo cancellation',
-                subtitle: '降低 Full-duplex 播放时扬声器回到麦克风的回声。',
+                title: '回声消除',
+                subtitle: '降低全双工播放时扬声器回到麦克风的回声。',
                 value: s.aecEnabled,
                 onChanged: (v) {
                   s.setAecEnabled(v);
@@ -300,11 +348,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: 14),
           _settingsSection(
             icon: Icons.timer_outlined,
-            title: 'Response Limits',
+            title: '响应限制',
             subtitle: '语音链路使用的超时和上下文窗口。',
             children: [
               _settingsSlider(
-                title: 'STT timeout',
+                title: '语音识别超时',
                 valueText: '${s.sttTimeoutSeconds}s',
                 slider: Slider(
                   value: s.sttTimeoutSeconds.toDouble().clamp(1, 60),
@@ -319,7 +367,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               ),
               _settingsSlider(
-                title: 'Correction / Translation timeout',
+                title: '纠错和翻译超时',
                 valueText: '${s.llmTimeoutSeconds}s',
                 slider: Slider(
                   value: s.llmTimeoutSeconds.toDouble().clamp(1, 60),
@@ -334,7 +382,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               ),
               _settingsSlider(
-                title: 'TTS timeout',
+                title: '语音播放超时',
                 valueText: '${s.ttsTimeoutSeconds}s',
                 slider: Slider(
                   value: s.ttsTimeoutSeconds.toDouble().clamp(1, 60),
@@ -349,9 +397,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               ),
               _settingsSlider(
-                title: 'History context for translation',
+                title: '翻译参考历史条数',
                 valueText: s.historyContextCount == 0
-                    ? 'off'
+                    ? '关闭'
                     : '${s.historyContextCount}',
                 slider: Slider(
                   value: s.historyContextCount.toDouble().clamp(0, 10),
@@ -359,7 +407,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   max: 10,
                   divisions: 10,
                   label: s.historyContextCount == 0
-                      ? 'off'
+                      ? '关闭'
                       : '${s.historyContextCount}',
                   onChanged: (v) {
                     s.setHistoryContextCount(v.round());
@@ -412,7 +460,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  '管理 provider、模型路由、语音和超时。',
+                  '管理服务商、模型路由、语音和超时。',
                   style: TextStyle(
                     color: cs.onPrimaryContainer.withValues(alpha: 0.72),
                     fontSize: 13,
@@ -593,6 +641,163 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  Widget _providerSettingsList() {
+    final primary = kCatalog.firstWhere((p) => p.id == 'openrouter');
+    final secondary = kCatalog.where((p) => p.id != primary.id).toList();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (_showProviderQuickStart) _openRouterQuickStartCard(primary),
+        if (!_showProviderQuickStart) _providerCard(primary),
+        _additionalProvidersToggle(),
+        if (_showAdditionalProviders) ...[
+          const SizedBox(height: 10),
+          _relayProviderCard(),
+          const SizedBox(height: 10),
+          for (final p in secondary) _providerCard(p),
+        ],
+      ],
+    );
+  }
+
+  Widget _openRouterQuickStartCard(ProviderSpec p) {
+    final s = widget.settings;
+    final cs = Theme.of(context).colorScheme;
+    final model =
+        p.findModel(s.chatModelId) ?? p.modelsFor(Capability.chat).first;
+    final isDefaultChat = s.chatProviderId == p.id;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: cs.primaryContainer.withValues(alpha: 0.45),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: cs.primary.withValues(alpha: 0.22)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 34,
+                  height: 34,
+                  decoration: BoxDecoration(
+                    color: cs.surface.withValues(alpha: 0.72),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(Icons.rocket_launch_outlined, color: cs.primary),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '快速开始：OpenRouter',
+                        style: TextStyle(
+                          color: cs.onPrimaryContainer,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        '粘贴 API 密钥后会立即保存，默认对话模型已选为 ${model.label}。',
+                        style: TextStyle(
+                          color: cs.onPrimaryContainer.withValues(alpha: 0.75),
+                          fontSize: 12,
+                          height: 1.3,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            _credentialField(
+              providerId: p.id,
+              field: CredentialField.apiKey,
+              labelText: 'OpenRouter 密钥',
+              hintText: 'sk-or-...',
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '也可以展开下方配置 AI Chat Relay、OpenAI、Gemini 等服务商。',
+                    style: TextStyle(
+                      color: cs.onPrimaryContainer.withValues(alpha: 0.72),
+                      fontSize: 12,
+                      height: 1.3,
+                    ),
+                  ),
+                ),
+                if (!isDefaultChat) ...[
+                  const SizedBox(width: 8),
+                  OutlinedButton.icon(
+                    onPressed: () async {
+                      await s.setChatProvider(p.id);
+                      if (mounted) setState(() {});
+                    },
+                    icon: const Icon(Icons.check_circle_outline),
+                    label: const Text('设为默认'),
+                  ),
+                ],
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _additionalProvidersToggle() {
+    final cs = Theme.of(context).colorScheme;
+    return InkWell(
+      borderRadius: BorderRadius.circular(12),
+      onTap: () {
+        setState(() {
+          _showAdditionalProviders = !_showAdditionalProviders;
+        });
+      },
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: cs.outlineVariant),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              _showAdditionalProviders
+                  ? Icons.keyboard_arrow_up
+                  : Icons.keyboard_arrow_down,
+              size: 20,
+              color: cs.onSurfaceVariant,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'AI Chat Relay 和其他服务商',
+                style: TextStyle(
+                  color: cs.onSurfaceVariant,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _relayProviderCard() {
     final s = widget.settings;
     final relay = s.relayProvider;
@@ -602,7 +807,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final ttsCount = relay?.modelsFor(Capability.tts).length ?? 0;
     final status = relay == null
         ? '未抓取模型'
-        : '已抓取 ${relay.models.length} 个模型 · Chat $chatCount · STT $sttCount · TTS $ttsCount';
+        : '已抓取 ${relay.models.length} 个模型 · 对话 $chatCount · 语音识别 $sttCount · 语音播放 $ttsCount';
     final fetchedAt = s.relayCatalogFetchedAt;
     final relayBaseUrlReady = _relayBaseUrlCtrl.text.trim().isNotEmpty;
     final relayApiKeyReady = _credCtrl(
@@ -645,7 +850,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     borderRadius: BorderRadius.circular(999),
                   ),
                   child: Text(
-                    relay == null ? 'not loaded' : 'ready',
+                    relay == null ? '未加载' : '可用',
                     style: TextStyle(
                       color: relay == null
                           ? cs.onSurfaceVariant
@@ -663,23 +868,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
               keyboardType: TextInputType.url,
               onChanged: (_) => setState(() {}),
               decoration: const InputDecoration(
-                labelText: 'Relay Models URL',
+                labelText: 'Relay 模型接口地址',
                 hintText: kRelayBaseUrlExample,
                 isDense: true,
                 prefixIcon: Icon(Icons.link_outlined, size: 18),
               ),
             ),
             const SizedBox(height: 8),
-            TextField(
-              controller: _credCtrl(kRelayProviderId, CredentialField.apiKey),
-              obscureText: true,
-              onChanged: (_) => setState(() {}),
-              decoration: const InputDecoration(
-                labelText: 'Relay API Key',
-                hintText: 'sk-relay_...',
-                isDense: true,
-                prefixIcon: Icon(Icons.lock_outline, size: 18),
-              ),
+            _credentialField(
+              providerId: kRelayProviderId,
+              field: CredentialField.apiKey,
+              labelText: 'Relay 密钥',
+              hintText: 'sk-relay_...',
             ),
             const SizedBox(height: 10),
             Row(
@@ -706,8 +906,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 const SizedBox(width: 8),
                 Tooltip(
                   message: canFetchRelay
-                      ? 'Fetch models'
-                      : '需要先填写 Relay Base URL 和 Relay API Key',
+                      ? '抓取模型'
+                      : '需要先填写 Relay 模型接口地址和 Relay 密钥',
                   child: FilledButton.icon(
                     onPressed: _relayFetching || !canFetchRelay
                         ? null
@@ -745,7 +945,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
                         : const Icon(Icons.cloud_sync_outlined),
-                    label: Text(_relayFetching ? 'Fetching' : 'Fetch models'),
+                    label: Text(_relayFetching ? '抓取中' : '抓取模型'),
                   ),
                 ),
               ],
@@ -772,10 +972,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
           child: Text(
             '推荐填写完整接口，例如：\n'
             'https://relay.example.com/v1/models\n\n'
-            '接口应返回 OpenAI-compatible 模型列表：\n'
+            '接口应返回兼容 OpenAI 的模型列表：\n'
             '{ "object": "list", "data": [ { "id": "model-id", "object": "model", "owned_by": "provider" } ] }\n\n'
-            '如果要让 App 识别语音、图片、TTS 等能力，可在 data[] 的每个模型对象里附加扩展字段：public_id、provider_id、display_name、capabilities、input_modalities、voices、stt_transport、supports_direct_audio_translate。\n\n'
-            '没有 capabilities 字段时，App 会把模型按 Chat-only 处理。',
+            '如果要让应用识别语音、图片、语音播放等能力，可在 data[] 的每个模型对象里附加扩展字段：public_id、provider_id、display_name、capabilities、input_modalities、voices、stt_transport、supports_direct_audio_translate。\n\n'
+            '没有 capabilities 字段时，应用会把模型按仅对话处理。',
           ),
         ),
         actions: [
@@ -791,9 +991,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Widget _providerCard(ProviderSpec p) {
     final s = widget.settings;
     final caps = <String>[
-      if (p.hasCapability(Capability.chat)) 'Chat',
-      if (p.hasCapability(Capability.stt)) 'STT',
-      if (p.hasCapability(Capability.tts)) 'TTS',
+      if (p.hasCapability(Capability.chat)) '对话',
+      if (p.hasCapability(Capability.stt)) '语音识别',
+      if (p.hasCapability(Capability.tts)) '语音播放',
     ].join(' · ');
     final cs = Theme.of(context).colorScheme;
     final hasKey = s.hasCredentials(p.id);
@@ -828,7 +1028,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       borderRadius: BorderRadius.circular(999),
                     ),
                     child: Text(
-                      'no API key',
+                      '缺少密钥',
                       style: TextStyle(
                         color: cs.onErrorContainer,
                         fontSize: 11,
@@ -860,18 +1060,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             const SizedBox(height: 8),
             for (final f in p.credentials) ...[
-              TextField(
-                controller: _credCtrl(p.id, f),
-                obscureText: true,
-                decoration: InputDecoration(
-                  labelText: f.label,
-                  isDense: true,
-                  prefixIcon: const Icon(Icons.lock_outline, size: 18),
-                ),
-                onChanged: (v) {
-                  s.setCredential(p.id, f, v);
-                  setState(() {});
-                },
+              _credentialField(
+                providerId: p.id,
+                field: f,
+                labelText: _credentialFieldLabel(f),
               ),
               const SizedBox(height: 8),
             ],
@@ -879,6 +1071,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
       ),
     );
+  }
+
+  String _credentialFieldLabel(CredentialField field) {
+    switch (field) {
+      case CredentialField.apiKey:
+        return 'API 密钥';
+      case CredentialField.appKey:
+        return '应用密钥';
+      case CredentialField.accessKey:
+        return '访问密钥';
+    }
   }
 
   Widget _ttsVoicePicker() {
@@ -893,7 +1096,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return DropdownButtonFormField<String>(
       initialValue: value,
       isExpanded: true,
-      decoration: const InputDecoration(labelText: 'Voice', isDense: true),
+      decoration: const InputDecoration(labelText: '声音', isDense: true),
       items: voices
           .map(
             (v) => DropdownMenuItem(
@@ -916,7 +1119,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Widget _doubaoSpeechRate() {
     final s = widget.settings;
     return _settingsSlider(
-      title: 'Speech rate',
+      title: '语速',
       valueText:
           '${s.ttsVolcSpeechRate > 0 ? '+' : ''}${s.ttsVolcSpeechRate} / ${(1 + s.ttsVolcSpeechRate / 100).toStringAsFixed(2)}x',
       slider: Slider(

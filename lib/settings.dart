@@ -36,6 +36,10 @@ const kTranslationLanguages = <String>[
 ];
 
 class AppSettings extends ChangeNotifier {
+  static const _defaultProviderId = 'openrouter';
+  static const _defaultOpenRouterChatModel = 'google/gemini-3.1-flash-lite';
+  static const _defaultOpenRouterTtsModel = 'x-ai/grok-voice-tts-1.0';
+
   // ---- New unified keys ----
   // Per-provider credentials: cred__<providerId>__<fieldName>
   static String _credKey(String providerId, CredentialField f) =>
@@ -142,6 +146,9 @@ class AppSettings extends ChangeNotifier {
       (f) => credential(providerId, f).trim().isNotEmpty,
     );
   }
+
+  bool get hasAnyChatProviderCredentials =>
+      providersFor(Capability.chat).any((p) => hasCredentials(p.id));
 
   // ---- Selected provider/model per capability ----
   String? chatProviderId;
@@ -251,7 +258,9 @@ class AppSettings extends ChangeNotifier {
 
     // Chat provider/model — fall back to legacy enum (0=openai, 1=gemini).
     chatProviderId =
-        p.getString(_kChatProvider) ?? _legacyChatProviderId(p) ?? 'google';
+        p.getString(_kChatProvider) ??
+        _legacyChatProviderId(p) ??
+        _defaultProviderId;
     chatModelId =
         p.getString(_kChatModel) ??
         p.getString(_legacyModel) ??
@@ -284,8 +293,10 @@ class AppSettings extends ChangeNotifier {
     if (p.containsKey(_kTtsProviderId)) {
       final v = p.getString(_kTtsProviderId);
       ttsProviderId = (v == null || v.isEmpty) ? null : v;
-    } else {
+    } else if (p.containsKey(_legacyTtsMode)) {
       ttsProviderId = _legacyTtsProviderId(p);
+    } else {
+      ttsProviderId = _defaultProviderId;
     }
     final lastTts = p.getString(_kLastTtsProviderId);
     _lastTtsProviderId = (lastTts == null || lastTts.isEmpty)
@@ -347,9 +358,9 @@ class AppSettings extends ChangeNotifier {
     historyContextCount = p.getInt(_kHistoryContextCount) ?? 0;
     aecEnabled = p.getBool(_kAecEnabled) ?? true;
     continuousFullDuplex = p.getBool(_kContinuousFullDuplex) ?? false;
-    audioDirectChat = p.getBool(_kAudioDirectChat) ?? false;
+    audioDirectChat = p.getBool(_kAudioDirectChat) ?? true;
     audioDirectIncludeTranscript =
-        p.getBool(_kAudioDirectIncludeTranscript) ?? false;
+        p.getBool(_kAudioDirectIncludeTranscript) ?? true;
     includeScenePrompt = p.getBool(_kIncludeScenePrompt) ?? true;
 
     notifyListeners();
@@ -459,8 +470,25 @@ class AppSettings extends ChangeNotifier {
   String? _firstModelId(String providerId, Capability c) {
     final p = findProvider(providerId);
     if (p == null) return null;
+    final preferred = _preferredModelId(providerId, c);
+    if (preferred != null) {
+      final model = p.findModel(preferred);
+      if (model != null && model.supports(c)) return preferred;
+    }
     final m = p.modelsFor(c);
     return m.isEmpty ? null : m.first.id;
+  }
+
+  String? _preferredModelId(String providerId, Capability c) {
+    if (providerId != _defaultProviderId) return null;
+    switch (c) {
+      case Capability.chat:
+        return _defaultOpenRouterChatModel;
+      case Capability.tts:
+        return _defaultOpenRouterTtsModel;
+      case Capability.stt:
+        return null;
+    }
   }
 
   String? _firstVoice(String providerId, String modelId) {
@@ -471,8 +499,27 @@ class AppSettings extends ChangeNotifier {
   }
 
   String? _firstProviderId(Capability c) {
-    final p = providersFor(c);
-    return p.isEmpty ? null : p.first.id;
+    final providers = providersFor(c).toList();
+    if (providers.isEmpty) return null;
+    providers.sort((a, b) {
+      final priority = _providerPriority(
+        a.id,
+      ).compareTo(_providerPriority(b.id));
+      if (priority != 0) return priority;
+      return 0;
+    });
+    return providers.first.id;
+  }
+
+  int _providerPriority(String id) {
+    switch (id) {
+      case 'openrouter':
+        return 0;
+      case kRelayProviderId:
+        return 1;
+      default:
+        return 2;
+    }
   }
 
   String? _validProviderId(String? providerId, Capability c) {

@@ -153,6 +153,25 @@ class SttService {
     http.Client client,
     Duration timeout,
   ) async {
+    if (!_isOpenRouterTranscriptionModel(req.modelId)) {
+      return _openRouterChatTranscribe(filePath, format, req, client, timeout);
+    }
+    return _openRouterAudioTranscriptions(
+      filePath,
+      format,
+      req,
+      client,
+      timeout,
+    );
+  }
+
+  Future<String> _openRouterAudioTranscriptions(
+    String filePath,
+    String format,
+    SttRequest req,
+    http.Client client,
+    Duration timeout,
+  ) async {
     final apiKey = req.creds[CredentialField.apiKey] ?? '';
     if (apiKey.isEmpty) {
       throw StateError('OpenRouter API key is not set.');
@@ -181,6 +200,62 @@ class SttService {
     }
     final data = jsonDecode(bodyStr) as Map<String, dynamic>;
     return (data['text'] as String? ?? '').trim();
+  }
+
+  Future<String> _openRouterChatTranscribe(
+    String filePath,
+    String format,
+    SttRequest req,
+    http.Client client,
+    Duration timeout,
+  ) async {
+    final apiKey = req.creds[CredentialField.apiKey] ?? '';
+    if (apiKey.isEmpty) {
+      throw StateError('OpenRouter API key is not set.');
+    }
+    final endpoint = req.baseUrl.trim().isEmpty
+        ? 'https://openrouter.ai/api/v1/chat/completions'
+        : '${req.baseUrl.replaceAll(RegExp(r'/+$'), '')}/chat/completions';
+    final bytes = await File(filePath).readAsBytes();
+    final payload = {
+      'model': req.modelId,
+      'messages': [
+        {
+          'role': 'user',
+          'content': [
+            {'type': 'text', 'text': _geminiTranscriptionPrompt},
+            {
+              'type': 'input_audio',
+              'input_audio': {'data': base64Encode(bytes), 'format': format},
+            },
+          ],
+        },
+      ],
+    };
+    final resp = await client
+        .post(
+          Uri.parse(endpoint),
+          headers: {
+            'Authorization': 'Bearer $apiKey',
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode(payload),
+        )
+        .timeout(timeout);
+    final bodyStr = utf8.decode(resp.bodyBytes);
+    if (resp.statusCode >= 400) {
+      throw HttpException(
+        'OpenRouter chat STT failed: ${resp.statusCode} $bodyStr',
+      );
+    }
+    final data = jsonDecode(bodyStr) as Map<String, dynamic>;
+    final text = _extractOpenAICompatibleText(data);
+    if (text.isEmpty) {
+      throw HttpException(
+        'OpenRouter chat STT returned no transcript: $bodyStr',
+      );
+    }
+    return text.trim();
   }
 
   /// ElevenLabs Scribe batch transcription.
@@ -399,6 +474,35 @@ class SttService {
     final parts = content is Map ? content['parts'] : null;
     if (parts is! List) return '';
     return parts.map((p) => p['text'] ?? '').join().trim();
+  }
+
+  String _extractOpenAICompatibleText(Map<String, dynamic> data) {
+    final choices = data['choices'] as List?;
+    if (choices == null || choices.isEmpty) return '';
+    final first = choices.first;
+    if (first is! Map<String, dynamic>) return '';
+    final message = first['message'];
+    if (message is! Map<String, dynamic>) return '';
+    final content = message['content'];
+    if (content is String) return content.trim();
+    if (content is List) {
+      return content
+          .whereType<Map>()
+          .map((part) => part['text'] ?? '')
+          .join()
+          .trim();
+    }
+    final audio = message['audio'];
+    if (audio is Map && audio['transcript'] is String) {
+      return (audio['transcript'] as String).trim();
+    }
+    return '';
+  }
+
+  bool _isOpenRouterTranscriptionModel(String modelId) {
+    final normalized = modelId.toLowerCase();
+    return normalized.startsWith('openai/') &&
+        normalized.contains('transcribe');
   }
 
   String _mimeType(String format) {
