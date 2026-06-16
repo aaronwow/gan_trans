@@ -364,22 +364,25 @@ const _openRouter = ProviderSpec(
     ModelSpec(
       id: 'google/gemini-3-flash-preview',
       label: 'Gemini 3 Flash',
-      caps: {Capability.chat},
+      caps: {Capability.chat, Capability.stt},
       inputs: {Modality.text, Modality.audio, Modality.image},
+      sttTransport: SttTransport.batchUpload,
       supportsDirectAudioTranslate: true,
     ),
     ModelSpec(
       id: 'google/gemini-3.5-flash',
       label: 'Gemini 3.5 Flash',
-      caps: {Capability.chat},
+      caps: {Capability.chat, Capability.stt},
       inputs: {Modality.text, Modality.audio, Modality.image},
+      sttTransport: SttTransport.batchUpload,
       supportsDirectAudioTranslate: true,
     ),
     ModelSpec(
       id: 'google/gemini-3.1-flash-lite',
       label: 'Gemini 3.1 Flash Lite',
-      caps: {Capability.chat},
+      caps: {Capability.chat, Capability.stt},
       inputs: {Modality.text, Modality.audio, Modality.image},
+      sttTransport: SttTransport.batchUpload,
       supportsDirectAudioTranslate: true,
     ),
     ModelSpec(

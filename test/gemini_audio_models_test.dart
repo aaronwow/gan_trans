@@ -34,20 +34,25 @@ void main() {
     expect(tts.voices.map((v) => v.id), containsAll(['Kore', 'Puck']));
   });
 
-  test('OpenRouter Gemini chat models expose direct audio translation', () {
-    final openrouter = findProvider('openrouter')!;
+  test(
+    'OpenRouter Gemini chat models expose STT and direct audio translation',
+    () {
+      final openrouter = findProvider('openrouter')!;
 
-    for (final modelId in [
-      'google/gemini-3-flash-preview',
-      'google/gemini-3.5-flash',
-      'google/gemini-3.1-flash-lite',
-    ]) {
-      final model = openrouter.findModel(modelId)!;
-      expect(model.supports(Capability.chat), isTrue, reason: modelId);
-      expect(model.acceptsAudio(), isTrue, reason: modelId);
-      expect(model.canTranslateAudioDirect, isTrue, reason: modelId);
-    }
-  });
+      for (final modelId in [
+        'google/gemini-3-flash-preview',
+        'google/gemini-3.5-flash',
+        'google/gemini-3.1-flash-lite',
+      ]) {
+        final model = openrouter.findModel(modelId)!;
+        expect(model.supports(Capability.chat), isTrue, reason: modelId);
+        expect(model.supports(Capability.stt), isTrue, reason: modelId);
+        expect(model.acceptsAudio(), isTrue, reason: modelId);
+        expect(model.canTranslateAudioDirect, isTrue, reason: modelId);
+        expect(model.sttTransport, SttTransport.batchUpload, reason: modelId);
+      }
+    },
+  );
 
   test('OpenRouter exposes OpenAI transcription models', () {
     final openrouter = findProvider('openrouter')!;
